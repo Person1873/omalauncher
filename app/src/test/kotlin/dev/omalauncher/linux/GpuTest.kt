@@ -103,12 +103,12 @@ class GpuTest {
         assertTrue(probe.contains("export LIBGL_DRIVERS_PATH='/usr/local/omalauncher-mesa/lib/dri';"))
         assertTrue(probe.contains("export __EGL_VENDOR_LIBRARY_FILENAMES='/usr/local/share/glvnd/egl_vendor.d/50_mesa.json';"))
         val extractAt = script.indexOf("tar -xJf '/usr/local/share/omalauncher/mesa-zink.tar.xz' -C / &&")
-        val tarHashAt = script.indexOf("104daac072cf1a0148a5928f8f773eab760512ed1bf9b05d02cc670d8150dfe3")
+        val tarHashAt = script.indexOf("714e04a323f2aef5c6ed0a05bc0f9d7ac64132ae16d070d00e30eb246ed9f35b")
         assertTrue(tarHashAt >= 0 && extractAt > tarHashAt)
         assertFalse(script.contains("--absolute-names"))
         assertTrue(script.contains("! grep -Ev '^usr/local/omalauncher-mesa/'"))
         assertTrue(script.contains("/usr/local/omalauncher-mesa/lib/libEGL_mesa.so"))
-        assertTrue(script.contains("bf9ea007f4babd55c86cfe87e8fd7b0cfa47e78fc34aa89b72fa60c7b84837e9"))
+        assertTrue(script.contains("bd5dcf269a9fc6f7b8e19250942d0180cfb0530aa6c6bf0e5f0d0ce5d22a2d57"))
         assertEquals("Adreno", driver.label)
     }
 

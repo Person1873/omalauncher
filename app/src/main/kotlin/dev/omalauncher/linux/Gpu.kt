@@ -12,6 +12,7 @@ import java.io.File
 import java.io.FileNotFoundException
 import java.nio.file.Files
 import java.nio.file.LinkOption
+import java.security.MessageDigest
 
 /**
  * Opt-in GPU acceleration for Linux apps. The device node picks the driver:
@@ -71,9 +72,10 @@ class Gpu(
         val driver = spec ?: return
         if (!wanted || active || state is JobState.Working) return
         if (!guestFile(driver.driverPath).isFile) return turnOff()
-        // GPU mode turned on before this driver used the patched Mesa: its env
-        // names that Mesa, so install it first.
-        if (!guestFile(GpuDrivers.MESA_ZINK_LIB).isFile) {
+        // Not the patched Mesa this build carries (GPU mode came on before the
+        // driver used it, or an older bundle is installed): its env names that
+        // Mesa, so install it first.
+        if (!mesaCurrent()) {
             stageMesaBundle()
             if (!run("installing", GpuDrivers.mesaZinkScript())) {
                 proot.graphicsEnv = SOFTWARE_ENV
@@ -133,6 +135,14 @@ class Gpu(
         proot.graphicsEnv = SOFTWARE_ENV
         spec?.let(::conceal)
     }
+
+    /** The installed libEGL is the one this build's bundle pins. */
+    private fun mesaCurrent(): Boolean =
+        runCatching {
+            val lib = guestFile(GpuDrivers.MESA_ZINK_LIB)
+            val digest = MessageDigest.getInstance("SHA-256").digest(lib.readBytes())
+            digest.joinToString("") { "%02x".format(it) } == GpuDrivers.MESA_ZINK_LIB_SHA256
+        }.getOrDefault(false)
 
     private fun activate(driver: GpuDriver) {
         active = true

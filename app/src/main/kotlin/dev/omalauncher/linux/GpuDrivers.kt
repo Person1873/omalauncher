@@ -125,9 +125,9 @@ internal object GpuDrivers {
     const val MESA_ZINK_LIB = "/usr/local/omalauncher-mesa/lib/libEGL_mesa.so"
     const val MESA_EGL_JSON = "/usr/local/share/glvnd/egl_vendor.d/50_mesa.json"
     /** Whole archive, checked before any extract. */
-    const val MESA_ZINK_TAR_SHA256 = "104daac072cf1a0148a5928f8f773eab760512ed1bf9b05d02cc670d8150dfe3"
+    const val MESA_ZINK_TAR_SHA256 = "714e04a323f2aef5c6ed0a05bc0f9d7ac64132ae16d070d00e30eb246ed9f35b"
     /** libEGL_mesa.so after extract. sha256sum follows the symlink. */
-    const val MESA_ZINK_LIB_SHA256 = "bf9ea007f4babd55c86cfe87e8fd7b0cfa47e78fc34aa89b72fa60c7b84837e9"
+    const val MESA_ZINK_LIB_SHA256 = "bd5dcf269a9fc6f7b8e19250942d0180cfb0530aa6c6bf0e5f0d0ce5d22a2d57"
 
     private val mali = GpuDriver(
         kind = GpuKind.MALI,
