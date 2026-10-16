@@ -22,6 +22,12 @@ class LinuxDocumentsProviderTest {
         LinuxDocumentsProvider.relativePath("etc/passwd")
     }
 
+    @Test fun dotfilesShowButProotLinksDont() {
+        assertEquals(false, LinuxDocumentsProvider.isProotLink(".config"))
+        assertEquals(false, LinuxDocumentsProvider.isProotLink(".ssh"))
+        assertEquals(true, LinuxDocumentsProvider.isProotLink(".l2s.known_hosts0001.0001"))
+    }
+
     @Test fun pickerNamesStayOneSegment() {
         assertEquals("a_b", LinuxDocumentsProvider.safeName("a/b"))
         assertEquals("untitled", LinuxDocumentsProvider.safeName(".."))
