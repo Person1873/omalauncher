@@ -56,7 +56,7 @@ class LinuxDocumentsProvider : DocumentsProvider() {
         val dir = fileOf(parentDocumentId)
         val cursor = MatrixCursor(projection ?: DOCUMENT_COLUMNS)
         dir.listFiles()
-            ?.filterNot { it.name.startsWith(".") }
+            ?.filterNot { isProotLink(it.name) }
             ?.forEach { child -> runCatching { addRow(cursor, childId(parentDocumentId, child.name), child) } }
         cursor.setNotificationUri(context!!.contentResolver, childrenUri(parentDocumentId))
         return cursor
@@ -178,6 +178,12 @@ class LinuxDocumentsProvider : DocumentsProvider() {
                 documentId.startsWith("$HOME_ID/") -> documentId.removePrefix("$HOME_ID/")
                 else -> throw FileNotFoundException(documentId)
             }
+
+        /**
+         * proot's stand-ins for hard links (link2symlink): the real file behind a hard-linked name. Hidden, as in
+         * Linux, but also from dotfile listings: deleting one through the picker breaks every name linked to it.
+         */
+        internal fun isProotLink(name: String) = name.startsWith(".l2s.")
 
         /** A name the picker may pass, made safe as one path segment. */
         internal fun safeName(name: String): String {
