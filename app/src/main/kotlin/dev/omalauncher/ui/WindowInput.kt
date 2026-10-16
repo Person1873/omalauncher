@@ -1,10 +1,15 @@
 package dev.omalauncher.ui
 
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.input.pointer.AwaitPointerEventScope
 import androidx.compose.ui.input.pointer.PointerEvent
 import androidx.compose.ui.input.pointer.PointerEventType
+import androidx.compose.ui.input.pointer.PointerId
+import androidx.compose.ui.input.pointer.PointerInputChange
 import androidx.compose.ui.input.pointer.PointerInputScope
 import androidx.compose.ui.input.pointer.PointerType
+import androidx.compose.ui.input.pointer.changedToDown
 import androidx.compose.ui.input.pointer.isPrimaryPressed
 import androidx.compose.ui.input.pointer.isSecondaryPressed
 import androidx.compose.ui.input.pointer.isTertiaryPressed
@@ -59,20 +64,10 @@ private suspend fun PointerInputScope.handlePointer(
         change.consume()
         if (!wm.onPress(window, hit) || hit == null) continue
 
-        // Clients with wl_touch (foot, GTK) get real touch: foot turns hold-and-drag into selection.
+        // Clients with wl_touch (foot, GTK) get real touch, every finger of it: foot turns
+        // hold-and-drag into selection, and apps see pinches and two-finger gestures.
         if (wm.wantsTouch(hit.surface)) {
-            val id = change.id.value.toInt()
-            wm.touchDown(hit, id)
-            while (true) {
-                val next = awaitPointerEvent()
-                val c = next.changes.firstOrNull { it.id == change.id } ?: break
-                // Taken by the home screen (a long press lifts a tile): the touch ends here.
-                if (c.isConsumed || !c.pressed) break
-                c.consume()
-                val d = (c.position - start) / wm.scale.toFloat()
-                wm.touchMotion(id, hit.x + d.x, hit.y + d.y)
-            }
-            wm.touchUp(id)
+            forwardTouches(wm, window, change, hit)
             continue
         }
 
@@ -110,6 +105,49 @@ private suspend fun PointerInputScope.handlePointer(
                 wm.scroll(-d.x / wm.scale, -d.y / wm.scale, AXIS_SOURCE_FINGER)
             }
             last = c.position
+        }
+    }
+}
+
+/**
+ * Sends each finger to the surface its own down landed on, until the last one
+ * lifts. Fingers that land while others are down get their own wl_touch id.
+ */
+private suspend fun AwaitPointerEventScope.forwardTouches(
+    wm: WindowManager,
+    window: XdgToplevel,
+    first: PointerInputChange,
+    firstHit: SurfaceHit,
+) {
+    class Touch(
+        val start: Offset,
+        val hit: SurfaceHit,
+    )
+    val touches = HashMap<PointerId, Touch>()
+    touches[first.id] = Touch(first.position, firstHit)
+    wm.touchDown(firstHit, first.id.value.toInt())
+    while (touches.isNotEmpty()) {
+        val event = awaitPointerEvent()
+        for (c in event.changes) {
+            val id = c.id.value.toInt()
+            val touch = touches[c.id]
+            if (touch == null) {
+                if (!c.changedToDown() || c.isConsumed) continue
+                val hit = window.hitTest(c.position.x, c.position.y) ?: continue
+                c.consume()
+                touches[c.id] = Touch(c.position, hit)
+                wm.touchDown(hit, id)
+                continue
+            }
+            // Lifted, or taken by the home screen (a long press lifts a tile): that finger's touch ends here.
+            if (c.isConsumed || !c.pressed) {
+                touches.remove(c.id)
+                wm.touchUp(id)
+                continue
+            }
+            c.consume()
+            val d = (c.position - touch.start) / wm.scale.toFloat()
+            wm.touchMotion(id, touch.hit.x + d.x, touch.hit.y + d.y)
         }
     }
 }
