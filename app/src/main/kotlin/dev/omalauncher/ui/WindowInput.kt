@@ -69,7 +69,7 @@ private suspend fun PointerInputScope.handlePointer(
                 // Taken by the home screen (a long press lifts a tile): the touch ends here.
                 if (c.isConsumed || !c.pressed) break
                 c.consume()
-                val d = (c.position - start) / wm.scale.toFloat()
+                val d = (c.position - start) / hit.scale
                 wm.touchMotion(id, hit.x + d.x, hit.y + d.y)
             }
             wm.touchUp(id)
@@ -107,7 +107,7 @@ private suspend fun PointerInputScope.handlePointer(
             }
             if (scrolling) {
                 val d = c.position - last
-                wm.scroll(-d.x / wm.scale, -d.y / wm.scale, AXIS_SOURCE_FINGER)
+                wm.scroll(-d.x / hit.scale, -d.y / hit.scale, AXIS_SOURCE_FINGER)
             }
             last = c.position
         }
