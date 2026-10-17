@@ -208,7 +208,13 @@ private fun AppWindow(
                 // Over the SurfaceView, which Compose's pointer input doesn't reach.
                 // A tap on the prompt line brings the keyboard back, as the ⌨ button does.
                 Box(Modifier.fillMaxSize().linuxWindowInput(runtime.wm, window, touchpad) { sink?.takeUnless { it.showing }?.show() })
-                TouchpadCursor(touchpad, Modifier.fillMaxSize())
+                // The app's own cursor is drawn by the renderer where the touchpad's is; the arrow fills in without one.
+                LaunchedEffect(touchpad) {
+                    snapshotFlow { touchpad.cursor.takeIf { touchpad.on } }.collect { at ->
+                        window.renderer?.cursorAt = at?.let { it.x to it.y }
+                    }
+                }
+                if (!runtime.wm.clientCursor) TouchpadCursor(touchpad, Modifier.fillMaxSize())
                 Column(Modifier.align(Alignment.BottomEnd).padding(12.dp)) {
                     // Shows the mode a tap switches to: a touchpad, or a finger for the touchscreen.
                     Box(

@@ -96,6 +96,14 @@ class WindowRenderer(
     var scene: List<Layer> = emptyList()
         private set
 
+    /** Where the touchpad mode's cursor is, in view pixels; null when it's off. The app's cursor image is drawn there. */
+    @Volatile
+    var cursorAt: Pair<Float, Float>? = null
+        set(value) {
+            field = value
+            requestFrame()
+        }
+
     /** Draws into [surface] of [w] x [h] pixels from now on (the view's surface was created or resized). */
     fun attach(
         surface: android.view.Surface,
@@ -211,6 +219,14 @@ class WindowRenderer(
             val origin = geometryOrigin(popup.xdg, scale) ?: continue
             val pg = popup.xdg.effectiveGeometry
             addTree(layers, popup.surface, origin.first - pg.x * scale, origin.second - pg.y * scale, scale, inPopup = true)
+        }
+        // The app's own cursor (a text beam, a resize arrow) at the touchpad's, its hotspot on the point.
+        val cursor = server.input.cursor
+        val cursorAt = cursorAt
+        val cursorSurface = cursor?.surface
+        if (cursorSurface != null && cursorAt != null && cursor.client === window.client && !cursorSurface.destroyed) {
+            val output = server.output.scale
+            addTree(layers, cursorSurface, (cursorAt.first - cursor.hotspotX * output).toInt(), (cursorAt.second - cursor.hotspotY * output).toInt(), output, inPopup = false)
         }
         return layers
     }
