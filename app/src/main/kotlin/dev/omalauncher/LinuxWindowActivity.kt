@@ -241,7 +241,13 @@ private fun AppWindow(
             ) {
                 // Over the SurfaceView, which Compose's pointer input doesn't reach.
                 Box(Modifier.fillMaxSize().linuxWindowInput(runtime.wm, window, touchpad))
-                TouchpadCursor(touchpad, Modifier.fillMaxSize())
+                // The app's own cursor is drawn by the renderer where the touchpad's is; the arrow fills in without one.
+                LaunchedEffect(touchpad) {
+                    snapshotFlow { touchpad.cursor.takeIf { touchpad.on } }.collect { at ->
+                        window.renderer?.cursorAt = at?.let { it.x to it.y }
+                    }
+                }
+                if (!runtime.wm.clientCursor) TouchpadCursor(touchpad, Modifier.fillMaxSize())
                 GamePad(gamePad, onKey = { code, down ->
                     if (runtime.wm.focused !== window) runtime.wm.focus(window)
                     runtime.wm.server.postInput { key(code, down) }
