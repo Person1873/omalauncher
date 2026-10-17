@@ -141,7 +141,9 @@ class Runtime(
         private set
 
     /** Linux is installed and its services run: guest commands (like the update check) can go. */
-    private var linux = false
+    /** Linux is up: its services run and apps can start. */
+    var linux by mutableStateOf(false)
+        private set
 
     /** The Linux install and removal; one at a time. */
     private var linuxJob: Job? = null
