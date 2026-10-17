@@ -81,7 +81,8 @@ class LinuxWindowActivity : InstantActivity() {
         setInstantContent {
             SystemBarsEffect(this@LinuxWindowActivity)
             AppWindow(runtime, window)
-            BackHandler { backInstantly() }
+            // A dialog over the app closes first, as Escape would close it on a desktop.
+            BackHandler { if (!runtime.wm.closeTopChild(window)) backInstantly() }
             LaunchedEffect(window) {
                 snapshotFlow { window in runtime.wm.appWindows }.first { !it }
                 closeInstantly()
