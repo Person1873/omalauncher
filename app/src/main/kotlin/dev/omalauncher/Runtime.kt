@@ -88,7 +88,7 @@ class Runtime(
     val usage = AppUsage(context)
     val themes = ThemeStore(context, proot, style, isLinux = { linux }, onConfigChanged = ::syncGuest)
     private val audio = AudioBridge(proot)
-    private val openBridge = OpenBridge(context, proot, onOpenFiles = ::openFiles, onEdit = ::edit)
+    private val openBridge = OpenBridge(context, proot, onOpenFiles = ::openFiles, onEdit = ::edit, onPick = ::pick)
     val agents = AgentStore(proot, onChanged = ::syncGuest)
     val pacman = Pacman(context, proot)
     val widgets = WidgetEngine(context, proot, this)
@@ -563,6 +563,14 @@ class Runtime(
     /** Opens the owl app in file [name] in its own task; nothing if it isn't running (removed, or broken). */
     fun openOwlApp(name: String) {
         if (widgets.isApp(name)) InstantActivity.startInstantly(context, OwlAppActivity.intent(context, name))
+    }
+
+    /** Shows a Linux app's file dialog: the Files app picking, answering on [reply] (see [FilePickActivity]). */
+    fun pick(
+        request: List<String>,
+        reply: String,
+    ) {
+        InstantActivity.startInstantly(context, FilePickActivity.intent(context, request, reply))
     }
 
     /** Opens the Files app, at [path] (a guest path) if given. */

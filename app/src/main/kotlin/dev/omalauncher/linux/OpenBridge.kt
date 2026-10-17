@@ -23,6 +23,8 @@ class OpenBridge(
     private val onOpenFiles: (String) -> Unit,
     /** A guest path to edit, and the host path of the FIFO that gets the reply once it's closed. */
     private val onEdit: (String, String) -> Unit,
+    /** A file dialog's request (FilePick.parse's fields), and the host path of the FIFO that gets the picked paths. */
+    private val onPick: (List<String>, String) -> Unit,
 ) {
     private val fifo = File(proot.runtimeDir, "open.fifo")
     private val guestFifo = "${Proot.GUEST_RUNTIME_DIR}/${fifo.name}"
@@ -56,6 +58,12 @@ class OpenBridge(
         if (url.startsWith(EDIT_PREFIX)) {
             val (reply, path) = url.removePrefix(EDIT_PREFIX).split(' ', limit = 2).takeIf { it.size == 2 } ?: return
             return onEdit(path, proot.guestFile(reply)?.path ?: return)
+        }
+        // Written by the file chooser portal's backend: its reply FIFO, then the request, tab-separated.
+        if (url.startsWith(PICK_PREFIX)) {
+            val fields = url.removePrefix(PICK_PREFIX).split('\t')
+            val reply = fields.first().takeIf { it.startsWith(Proot.GUEST_RUNTIME_DIR + "/") && !it.contains("..") } ?: return
+            return onPick(fields.drop(1), proot.hostFile(reply).path)
         }
         if (!url.startsWith("http://") && !url.startsWith("https://")) {
             Log.i(TAG, "ignoring non-URL $url")
@@ -112,5 +120,6 @@ class OpenBridge(
     private companion object {
         const val FILES_PREFIX = "omarchy-files:"
         const val EDIT_PREFIX = "omarchy-edit:"
+        const val PICK_PREFIX = "omarchy-pick:"
     }
 }
