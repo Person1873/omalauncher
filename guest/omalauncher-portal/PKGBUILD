@@ -2,12 +2,12 @@
 pkgbase=omalauncher-guest
 pkgname=(omalauncher-portal omalauncher-bwrap)
 pkgver=1
-pkgrel=1
+pkgrel=2
 arch=(aarch64)
 license=(MIT)
 makedepends=(gcc pkgconf glib2 gtk3)
-source=(omalauncher-portal.c filechooser-module.c org.freedesktop.portal.Desktop.service)
-sha256sums=(SKIP SKIP SKIP)
+source=(omalauncher-portal.c filechooser-module.c org.freedesktop.portal.Desktop.service org.freedesktop.Notifications.service)
+sha256sums=(SKIP SKIP SKIP SKIP)
 
 build() {
   gcc $CFLAGS $LDFLAGS -o omalauncher-portal omalauncher-portal.c $(pkg-config --cflags --libs gio-2.0)
@@ -18,12 +18,13 @@ build() {
 # under proot (it identifies callers through /proc/<pid>/root), so this one stands in for it, and for
 # xdg-desktop-portal-gtk, which gtk4 depends on.
 package_omalauncher-portal() {
-  pkgdesc="File dialogs for Linux apps through omalauncher's Files app (file chooser portal, GTK3 module)"
+  pkgdesc="File dialogs through omalauncher's Files app (file chooser portal, GTK3 module) and notifications as Android ones"
   depends=(glib2 gtk3)
   provides=(xdg-desktop-portal xdg-desktop-portal-impl xdg-desktop-portal-gtk)
   conflicts=(xdg-desktop-portal xdg-desktop-portal-gtk)
   install -Dm755 omalauncher-portal "$pkgdir/usr/lib/omalauncher/omalauncher-portal"
   install -Dm644 org.freedesktop.portal.Desktop.service "$pkgdir/usr/share/dbus-1/services/org.freedesktop.portal.Desktop.service"
+  install -Dm644 org.freedesktop.Notifications.service "$pkgdir/usr/share/dbus-1/services/org.freedesktop.Notifications.service"
   install -Dm755 libomalauncher-filechooser.so "$pkgdir/usr/lib/gtk-3.0/modules/libomalauncher-filechooser.so"
 }
 
