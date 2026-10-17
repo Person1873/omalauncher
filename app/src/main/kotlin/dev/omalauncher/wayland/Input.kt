@@ -147,6 +147,7 @@ class Input(
         depressedMods = 0
         keyboardFocus?.let { old ->
             keyboardsOf(old.client).forEach { it.send(it.event(2).uint(server.nextSerial()).obj(old.id)) }
+            old.client.all(TextInput::class.java).forEach { it.leave(old) }
         }
         val previous = keyboardFocus
         keyboardFocus = surface
@@ -157,6 +158,7 @@ class Input(
                 it.send(it.event(1).uint(server.nextSerial()).obj(s.id).ints(IntArray(0)))
                 sendModifiers(it)
             }
+            s.client.all(TextInput::class.java).forEach { it.enter(s) }
         }
     }
 
@@ -337,6 +339,7 @@ class Input(
     }
 
     fun surfaceDestroyed(surface: Surface) {
+        surface.client.all(TextInput::class.java).forEach { it.leave(surface) }
         if (pointerUnder?.surface === surface) pointerUnder = null
         touchUnder.entries.removeAll { it.value?.surface === surface }
         if (pointerFocus === surface) pointerFocus = null

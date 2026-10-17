@@ -2,6 +2,7 @@ package dev.omalauncher
 
 import android.annotation.SuppressLint
 import android.content.Context
+import android.content.res.Configuration
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Paint
@@ -41,6 +42,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.dp
@@ -163,6 +165,25 @@ private fun AppWindow(
     window: XdgToplevel,
 ) {
     var sink by remember { mutableStateOf<KeyboardSink?>(null) }
+    // A text field getting focus brings the soft keyboard up, the right one for it (a number pad for numbers), and
+    // takes it down again when it loses focus; not one the user opened, and none with a hardware keyboard.
+    val field = runtime.wm.textField(window)
+    val config = LocalConfiguration.current
+    val hardKeyboard = config.keyboard == Configuration.KEYBOARD_QWERTY && config.hardKeyboardHidden == Configuration.HARDKEYBOARDHIDDEN_NO
+    var autoShown by remember { mutableStateOf(false) }
+    LaunchedEffect(field, sink, hardKeyboard) {
+        val s = sink ?: return@LaunchedEffect
+        s.purpose = field ?: 0
+        if (field != null) {
+            if (!hardKeyboard && !s.wanted) {
+                s.show()
+                autoShown = true
+            }
+        } else if (autoShown) {
+            s.hide()
+            autoShown = false
+        }
+    }
     var surfaceView by remember { mutableStateOf<WindowSurfaceView?>(null) }
     val context = LocalContext.current
     val prefs = remember { context.getSharedPreferences("launcher", Context.MODE_PRIVATE) }
