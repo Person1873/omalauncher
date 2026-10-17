@@ -133,6 +133,7 @@ private suspend fun AwaitPointerEventScope.forwardTouches(
     )
     val touches = HashMap<PointerId, Touch>()
     touches[first.id] = Touch(first.position, firstHit)
+    wm.dragTo(window, first.position.x, first.position.y)
     wm.touchDown(firstHit, first.id.value.toInt())
     while (touches.isNotEmpty()) {
         val event = awaitPointerEvent()
@@ -154,10 +155,13 @@ private suspend fun AwaitPointerEventScope.forwardTouches(
                 continue
             }
             c.consume()
+            // The first finger is the one a torn-off window follows.
+            if (c.id == first.id) wm.dragTo(window, c.position.x, c.position.y)
             val d = (c.position - touch.start) / touch.hit.scale
-            wm.touchMotion(id, touch.hit.x + d.x, touch.hit.y + d.y)
+            wm.touchMotion(id, touch.hit.x + d.x, touch.hit.y + d.y, window.hitTest(c.position.x, c.position.y))
         }
     }
+    wm.endDrag()
 }
 
 private fun handleMouse(
