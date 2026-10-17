@@ -4,6 +4,7 @@ import android.os.Handler
 import android.os.Looper
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import dev.omalauncher.wayland.Keys
@@ -30,6 +31,25 @@ class WindowManager : WindowManagerHooks {
 
     var focused by mutableStateOf<XdgToplevel?>(null)
         private set
+
+    /**
+     * Windows (each task's) with a text field focused in them, or in a window over them, and what it's for
+     * (text_input_v3's content purpose): the soft keyboard comes up, a number pad for numbers.
+     */
+    private val textFields = mutableStateMapOf<XdgToplevel, Int>()
+
+    /** The focused text field's purpose in [window], or null when none has focus. */
+    fun textField(window: XdgToplevel) = textFields[window]
+
+    override fun textInputChanged(
+        surface: Surface,
+        enabled: Boolean,
+        purpose: Int,
+    ) {
+        val top = server.toplevelOf(surface) ?: return
+        val window = top.host ?: top
+        main.post { if (enabled) textFields[window] = purpose else textFields.remove(window) }
+    }
 
     /** Toplevels that have (or are getting) their own Android task. */
     val appWindows = mutableStateListOf<XdgToplevel>()

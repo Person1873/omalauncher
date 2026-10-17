@@ -27,6 +27,16 @@ interface WindowManagerHooks {
     fun toplevelCreated(toplevel: XdgToplevel)
 
     fun toplevelDestroyed(toplevel: XdgToplevel)
+
+    /**
+     * A text field in [surface] got focus ([enabled]) or lost it: the soft keyboard follows. [purpose] is what
+     * it's for, as text_input_v3's content purpose (2 digits, 3 number, 4 phone, 9 pin; 0 plain text).
+     */
+    fun textInputChanged(
+        surface: Surface,
+        enabled: Boolean,
+        purpose: Int,
+    ) {}
 }
 
 /**
@@ -51,6 +61,7 @@ class WaylandServer(
             Global("zxdg_decoration_manager_v1", 1, ::DecorationManager),
             Global("org_kde_kwin_server_decoration_manager", 1, ::ServerDecorationManager),
             Global("xdg_toplevel_drag_manager_v1", 1, ::ToplevelDragManager),
+            Global("zwp_text_input_manager_v3", 1, ::TextInputManager),
         )
 
     val clients = mutableListOf<Client>()

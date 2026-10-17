@@ -139,6 +139,17 @@ class KeyboardSink(
         isFocusableInTouchMode = true
     }
 
+    /**
+     * What the focused Linux text field is for, as text_input_v3's content purpose: digits and numbers get a
+     * number pad, phone numbers a dial pad; anything else the text keyboard.
+     */
+    var purpose = 0
+        set(value) {
+            if (value == field) return
+            field = value
+            if (softKeyboard) imm().restartInput(this)
+        }
+
     /** Whether the field was last offered as plain text, for a Chinese, Japanese or Korean keyboard. */
     private var cjk = false
 
@@ -168,7 +179,12 @@ class KeyboardSink(
         // Like Termux: no suggestions or autocorrect, raw keys where the IME allows. Gboard
         // drops pinyin and the like in such a field, so those get plain text, autocorrect and all.
         outAttrs.inputType =
-            if (cjk) {
+            when (purpose) {
+                PURPOSE_DIGITS, PURPOSE_PIN -> InputType.TYPE_CLASS_NUMBER
+                PURPOSE_NUMBER -> InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_DECIMAL or InputType.TYPE_NUMBER_FLAG_SIGNED
+                PURPOSE_PHONE -> InputType.TYPE_CLASS_PHONE
+                else -> null
+            } ?: if (cjk) {
                 InputType.TYPE_CLASS_TEXT
             } else {
                 InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD or
@@ -256,5 +272,11 @@ class KeyboardSink(
 }
 
 private val cjkLanguages = setOf("zh", "ja", "ko")
+
+/** text_input_v3 content purposes that get a keypad. */
+private const val PURPOSE_DIGITS = 2
+private const val PURPOSE_NUMBER = 3
+private const val PURPOSE_PHONE = 4
+private const val PURPOSE_PIN = 9
 
 private val volumeKeys = setOf(KeyEvent.KEYCODE_VOLUME_UP, KeyEvent.KEYCODE_VOLUME_DOWN, KeyEvent.KEYCODE_VOLUME_MUTE)
