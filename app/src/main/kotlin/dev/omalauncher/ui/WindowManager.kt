@@ -51,6 +51,14 @@ class WindowManager : WindowManagerHooks {
         main.post { if (enabled) textFields[window] = purpose else textFields.remove(window) }
     }
 
+    /** The app under the pointer draws its own cursor: the touchpad mode shows that instead of the launcher's arrow. */
+    var clientCursor by mutableStateOf(false)
+        private set
+
+    override fun cursorChanged(provided: Boolean) {
+        main.post { clientCursor = provided }
+    }
+
     /** Toplevels that have (or are getting) their own Android task. */
     val appWindows = mutableStateListOf<XdgToplevel>()
 

@@ -78,6 +78,14 @@ class WindowRenderer(
             requestFrame()
         }
 
+    /** Where the touchpad mode's cursor is, in view pixels; null when it's off. The app's cursor image is drawn there. */
+    @Volatile
+    var cursorAt: Pair<Float, Float>? = null
+        set(value) {
+            field = value
+            requestFrame()
+        }
+
     /** How much of the view, from its top, the window shows in (the rest is under the keyboard); 0 for all of it. */
     @Volatile
     var visibleHeight = 0
@@ -212,6 +220,13 @@ class WindowRenderer(
             val origin = geometryOrigin(popup.xdg, s) ?: continue
             val pg = popup.xdg.effectiveGeometry
             addTree(layers, popup.surface, origin.first - pg.x * s, origin.second - pg.y * s, s, inPopup = true)
+        }
+        // The app's own cursor (a text beam, a resize arrow) at the touchpad's, its hotspot on the point.
+        val cursor = server.input.cursor
+        val cursorAt = cursorAt
+        val cursorSurface = cursor?.surface
+        if (cursorSurface != null && cursorAt != null && cursor.client === window.client && !cursorSurface.destroyed) {
+            addTree(layers, cursorSurface, cursorAt.first - cursor.hotspotX * output, cursorAt.second - cursor.hotspotY * output, output.toFloat(), inPopup = false, hittable = false)
         }
         // A drag that started in this window draws its icon under the finger.
         val drag = server.input.drag

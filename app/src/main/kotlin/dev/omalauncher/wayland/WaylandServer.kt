@@ -28,6 +28,9 @@ interface WindowManagerHooks {
 
     fun toplevelDestroyed(toplevel: XdgToplevel)
 
+    /** The app under the pointer now draws its own cursor ([provided]), or stopped: the launcher's arrow steps aside. */
+    fun cursorChanged(provided: Boolean) {}
+
     /**
      * A text field in [surface] got focus ([enabled]) or lost it: the soft keyboard follows. [purpose] is what
      * it's for, as text_input_v3's content purpose (2 digits, 3 number, 4 phone, 9 pin; 0 plain text).
@@ -139,6 +142,8 @@ class WaylandServer(
 
     /** Called with the lock held after [surface] committed: its window redraws on the next vsync. */
     fun surfaceCommitted(surface: Surface) {
+        // A cursor belongs to no window: redraw the one the pointer's over.
+        if (surface === input.cursor?.surface) input.pointerFocus?.let { toplevelOf(it)?.renderer }?.requestFrame()
         val renderer = toplevelOf(surface)?.renderer
         when {
             renderer != null -> renderer.requestFrame()

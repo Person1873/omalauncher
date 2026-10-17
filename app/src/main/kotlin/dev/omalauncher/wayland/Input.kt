@@ -39,6 +39,31 @@ class Input(
     private var pointerUnder: SurfaceHit? = null
     private val touchUnder = HashMap<Int, SurfaceHit?>()
 
+    /** An app's cursor image: a surface, and where on it the pointer is. */
+    class Cursor(
+        val client: Client,
+        val surface: Surface?,
+        val hotspotX: Int,
+        val hotspotY: Int,
+    )
+
+    /** The cursor the app under the pointer last set; drawn where the touchpad mode's cursor is. */
+    @Volatile
+    var cursor: Cursor? = null
+        private set
+
+    /** set_cursor, honoured from the client the pointer is over (as the protocol says), else ignored. */
+    fun setCursor(
+        client: Client,
+        surface: Surface?,
+        x: Int,
+        y: Int,
+    ) {
+        if (pointerFocus?.client !== client && cursor?.client !== client) return
+        cursor = Cursor(client, surface?.takeIf { !it.destroyed }, x, y)
+        server.windowManager.cursorChanged(cursor?.surface != null)
+    }
+
     /** The drag and drop under way, if any; see [Drag]. */
     var drag: Drag? = null
         private set
@@ -342,6 +367,10 @@ class Input(
     }
 
     fun surfaceDestroyed(surface: Surface) {
+        if (cursor?.surface === surface) {
+            cursor = null
+            server.windowManager.cursorChanged(false)
+        }
         surface.client.all(TextInput::class.java).forEach { it.leave(surface) }
         if (pointerUnder?.surface === surface) pointerUnder = null
         touchUnder.entries.removeAll { it.value?.surface === surface }
