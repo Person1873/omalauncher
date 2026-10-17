@@ -99,7 +99,7 @@ internal suspend fun AwaitPointerEventScope.touchpadGesture(
         val c = (state.cursor ?: cursor0) + d * speed
         val clamped = Offset(c.x.coerceIn(0f, state.bounds.width - 1f), c.y.coerceIn(0f, state.bounds.height - 1f))
         state.cursor = clamped
-        wm.pointerMove(window.renderer?.hitTest(clamped.x, clamped.y))
+        wm.pointerAt(window, clamped.x, clamped.y)
     }
 
     wm.pointerMove(hitAtCursor())
