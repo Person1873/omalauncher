@@ -28,6 +28,7 @@ import dev.omalauncher.linux.LinuxDns
 import dev.omalauncher.linux.OpenBridge
 import dev.omalauncher.linux.Pacman
 import dev.omalauncher.linux.Proot
+import dev.omalauncher.linux.SessionBus
 import dev.omalauncher.linux.SystemUpdates
 import dev.omalauncher.linux.LauncherFont
 import dev.omalauncher.linux.TerminalFont
@@ -88,6 +89,7 @@ class Runtime(
     val usage = AppUsage(context)
     val themes = ThemeStore(context, proot, style, isLinux = { linux }, onConfigChanged = ::syncGuest)
     private val audio = AudioBridge(proot)
+    private val sessionBus = SessionBus(proot)
     private val openBridge = OpenBridge(context, proot, onOpenFiles = ::openFiles, onEdit = ::edit, onPick = ::pick)
     val agents = AgentStore(proot, onChanged = ::syncGuest)
     val pacman = Pacman(context, proot)
@@ -261,6 +263,7 @@ class Runtime(
                 launcherFont.forget()
                 widgets.linuxChanged(false)
                 audio.stop()
+                sessionBus.stop()
                 withContext(Dispatchers.IO) { proot.killAll() }
                 bootstrap.remove()
                 withContext(Dispatchers.IO) {
@@ -321,6 +324,7 @@ class Runtime(
         themes.renderGuest()
         withContext(Dispatchers.IO) {
             provisioner.sync()
+            sessionBus.start()
             audio.start()
             synchronized(server) { server.input.setKeymap(proot.keymap.path) }
             agents.load()
