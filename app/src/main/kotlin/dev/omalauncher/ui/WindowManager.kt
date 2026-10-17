@@ -80,7 +80,9 @@ class WindowManager : WindowManagerHooks {
             }
             // Desktop apps open these over the window they belong to; a task of its own would take the screen
             // from it, and end a drag that tore a toolbar off.
-            val host = toplevel.parent?.let { it.host ?: it }?.takeIf { it in appWindows }
+            // One a drag carries along (a torn-off toolbar) goes over the window the drag started in.
+            val owner = toplevel.parent ?: synchronized(server) { toplevel.dragSource?.let { server.input.drag?.origin } }
+            val host = owner?.let { it.host ?: it }?.takeIf { it in appWindows }
             if (host != null) {
                 synchronized(server) {
                     toplevel.host = host
@@ -178,6 +180,24 @@ class WindowManager : WindowManagerHooks {
         return true
     }
 
+    /**
+     * A pointer button or finger is held at view pixel ([x], [y]) of [window]: a drag and drop under way draws
+     * its icon and carries its window there.
+     */
+    fun dragTo(
+        window: XdgToplevel,
+        x: Float,
+        y: Float,
+    ) {
+        server.input.dragPoint = x to y
+        if (server.input.drag != null) window.renderer?.requestFrame()
+    }
+
+    /** Nothing's held any more. */
+    fun endDrag() {
+        server.input.dragPoint = null
+    }
+
     /** The surface a held button was pressed on: the pointer stays with it, wherever it goes, until release. */
     private var grabbed: Surface? = null
     private val heldButtons = HashSet<Int>()
@@ -188,16 +208,26 @@ class WindowManager : WindowManagerHooks {
         x: Float,
         y: Float,
     ) {
+        pointerPoint = x to y
         val r = window.renderer ?: return pointerMove(null)
-        pointerMove(grabbed?.let { r.locate(it, x, y) } ?: r.hitTest(x, y))
+        if (heldButtons.isNotEmpty()) dragTo(window, x, y)
+        val under = r.hitTest(x, y)
+        pointerMove(grabbed?.let { r.locate(it, x, y) } ?: under, under)
     }
 
     /** Where the pointer was last sent; input runs on its own thread, so this is ahead of Input's own focus. */
     private var pointerSurface: Surface? = null
 
-    fun pointerMove(hit: SurfaceHit?) {
+    /** The pointer's last position in view pixels, through [pointerAt]. */
+    private var pointerPoint: Pair<Float, Float>? = null
+
+    /** Moves the pointer onto [hit]; [under] is what's under it, which a drag and drop goes by (see [pointerAt]). */
+    fun pointerMove(
+        hit: SurfaceHit?,
+        under: SurfaceHit? = hit,
+    ) {
         pointerSurface = hit?.surface
-        server.postInput { pointerMotion(hit?.surface, hit?.x ?: 0f, hit?.y ?: 0f) }
+        server.postInput { pointerMotion(hit?.surface, hit?.x ?: 0f, hit?.y ?: 0f, under) }
     }
 
     fun pointerButton(
@@ -205,11 +235,17 @@ class WindowManager : WindowManagerHooks {
         pressed: Boolean,
     ) {
         if (pressed) {
-            if (heldButtons.isEmpty()) grabbed = pointerSurface
+            if (heldButtons.isEmpty()) {
+                grabbed = pointerSurface
+                server.input.dragPoint = pointerPoint
+            }
             heldButtons += button
         } else {
             heldButtons -= button
-            if (heldButtons.isEmpty()) grabbed = null
+            if (heldButtons.isEmpty()) {
+                grabbed = null
+                endDrag()
+            }
         }
         server.postInput { pointerButton(button, pressed) }
     }
@@ -237,11 +273,13 @@ class WindowManager : WindowManagerHooks {
         id: Int,
     ) = server.postInput { touchDown(hit.surface, id, hit.x, hit.y) }
 
+    /** A finger moved to ([x], [y]) on the surface it went down on; [under] is what it's over now, for a drag and drop. */
     fun touchMotion(
         id: Int,
         x: Float,
         y: Float,
-    ) = server.postInput { touchMotion(id, x, y) }
+        under: SurfaceHit? = null,
+    ) = server.postInput { touchMotion(id, x, y, under) }
 
     fun touchUp(id: Int) = server.postInput { touchUp(id) }
 
