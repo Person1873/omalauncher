@@ -51,6 +51,8 @@ import dev.omalauncher.ui.ExtraKeys
 import dev.omalauncher.ui.KeyboardSink
 import dev.omalauncher.ui.Mono
 import dev.omalauncher.ui.Palette
+import dev.omalauncher.ui.GamePad
+import dev.omalauncher.ui.GamePadState
 import dev.omalauncher.ui.TouchpadCursor
 import dev.omalauncher.ui.TouchpadState
 import dev.omalauncher.ui.linuxWindowInput
@@ -181,6 +183,7 @@ private fun AppWindow(
     // Remembered per app: a slicer stays a touchpad, a terminal stays a touchscreen.
     val touchpadKey = "touchpad_" + window.appId
     val touchpad = remember(touchpadKey) { TouchpadState(prefs.getBoolean(touchpadKey, false)) }
+    val gamePad = remember(window.appId) { GamePadState(prefs, window.appId) }
     // Shows wherever the window has yet to draw, as when it grows; the terminal's own background, not a lighter one.
     val background = Palette.background.toArgb()
     val density = LocalDensity.current
@@ -217,7 +220,24 @@ private fun AppWindow(
                 // Over the SurfaceView, which Compose's pointer input doesn't reach.
                 Box(Modifier.fillMaxSize().linuxWindowInput(runtime.wm, window, touchpad))
                 TouchpadCursor(touchpad, Modifier.fillMaxSize())
-                Column(Modifier.align(Alignment.BottomEnd).padding(12.dp)) {
+                GamePad(gamePad, onKey = { code, down ->
+                    if (runtime.wm.focused !== window) runtime.wm.focus(window)
+                    runtime.wm.server.postInput { key(code, down) }
+                })
+                // Out of the pad's way while it shows: its A and B sit where these do.
+                Column(Modifier.align(if (gamePad.on) Alignment.TopEnd else Alignment.BottomEnd).padding(12.dp)) {
+                    Box(
+                        Modifier
+                            .padding(bottom = 12.dp)
+                            .size(40.dp)
+                            .background(Palette.overlay, CircleShape)
+                            .border(1.5.dp, if (gamePad.on) Palette.accent else Palette.overlay, CircleShape)
+                            .clickable { gamePad.toggle() },
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        // A D-pad: the game pad over the window, lit while it shows.
+                        BasicText("\u271A", style = Mono.copy(color = if (gamePad.on) Palette.accent else Palette.foreground))
+                    }
                     // Shows the mode a tap switches to: a touchpad, or a finger for the touchscreen.
                     Box(
                         Modifier
