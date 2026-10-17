@@ -195,7 +195,7 @@ internal fun PasteBar(
 
 /** A surface row of [BracketAction]s under the list. */
 @Composable
-private fun BottomBar(content: @Composable RowScope.() -> Unit) {
+internal fun BottomBar(content: @Composable RowScope.() -> Unit) {
     Row(
         Modifier
             .padding(top = 8.dp)
