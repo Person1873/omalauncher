@@ -220,6 +220,12 @@ class XdgToplevel(
     @Volatile
     var position: Pair<Float, Float>? = null
 
+    /** It agreed to server-side decorations (xdg or KDE's protocol): floating, it gets the launcher's bar to move it by. */
+    val serverDecorated get() = xdgDecorated || surface.kdeDecorated
+
+    @Volatile
+    var xdgDecorated = false
+
     /** Attached to a drag (xdg_toplevel_drag): its geometry's corner this far off the pointer, while the drag runs. */
     @Volatile
     var dragOffset: Pair<Int, Int>? = null
@@ -252,7 +258,8 @@ class XdgToplevel(
             1 -> parent = client.get<XdgToplevel>(args.obj())?.takeIf { it !== this }
             2 -> title = args.string().orEmpty()
             3 -> appId = args.string().orEmpty()
-            else -> Unit // move/resize/maximize/etc.: a window fills its Android task, or floats over its parent
+            5 -> client.server.windowManager.moveRequested(this) // move: its title bar dragged; seat and serial don't matter here
+            else -> Unit // resize/maximize/etc.: a window fills its Android task, or floats over its parent
         }
     }
 
@@ -354,6 +361,7 @@ class DecorationManager(
             0 -> destroy()
             1 -> {
                 val deco = client.register(ToplevelDecoration(client, args.newId()))
+                client.get<XdgToplevel>(args.obj())?.xdgDecorated = true
                 deco.sendMode()
             }
         }
@@ -401,7 +409,11 @@ class ServerDecorationManager(
         opcode: Int,
         args: Args,
     ) {
-        if (opcode == 0) client.register(ServerDecoration(client, args.newId())).sendMode() // create; the surface doesn't matter
+        if (opcode == 0) { // create: a decoration for a surface
+            val deco = client.register(ServerDecoration(client, args.newId()))
+            client.get<Surface>(args.obj())?.kdeDecorated = true
+            deco.sendMode()
+        }
     }
 
     companion object {

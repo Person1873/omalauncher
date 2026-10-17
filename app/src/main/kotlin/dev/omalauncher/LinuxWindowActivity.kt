@@ -241,6 +241,12 @@ private fun AppWindow(
             ) {
                 // Over the SurfaceView, which Compose's pointer input doesn't reach.
                 Box(Modifier.fillMaxSize().linuxWindowInput(runtime.wm, window, touchpad))
+                // Floating windows that left decorating to us get the renderer's bar to move them by, and a ✕.
+                val barColors = intArrayOf(Palette.surface.toArgb(), Palette.foreground.toArgb(), Palette.muted.toArgb())
+                LaunchedEffect(density, barColors.toList()) {
+                    runtime.wm.decorationHeight = with(density) { 30.dp.roundToPx() }
+                    runtime.wm.decorationColors = barColors
+                }
                 // The app's own cursor is drawn by the renderer where the touchpad's is; the arrow fills in without one.
                 LaunchedEffect(touchpad) {
                     snapshotFlow { touchpad.cursor.takeIf { touchpad.on } }.collect { at ->
