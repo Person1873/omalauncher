@@ -110,7 +110,7 @@ private suspend fun PointerInputScope.handlePointer(
             }
             if (scrolling) {
                 val d = c.position - last
-                wm.scroll(-d.x / wm.scale, -d.y / wm.scale, AXIS_SOURCE_FINGER)
+                wm.scroll(-d.x / hit.scale, -d.y / hit.scale, AXIS_SOURCE_FINGER)
             }
             last = c.position
         }
@@ -154,7 +154,7 @@ private suspend fun AwaitPointerEventScope.forwardTouches(
                 continue
             }
             c.consume()
-            val d = (c.position - touch.start) / wm.scale.toFloat()
+            val d = (c.position - touch.start) / touch.hit.scale
             wm.touchMotion(id, touch.hit.x + d.x, touch.hit.y + d.y)
         }
     }
