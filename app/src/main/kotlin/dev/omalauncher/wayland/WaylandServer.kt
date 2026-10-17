@@ -28,6 +28,15 @@ interface WindowManagerHooks {
 
     fun toplevelDestroyed(toplevel: XdgToplevel)
 
+    /** [toplevel]'s title bar is being dragged (xdg_toplevel.move): a floating window follows the drag. */
+    fun moveRequested(toplevel: XdgToplevel) {}
+
+    /** The height of the launcher's bar over a floating window, in view pixels: room is left above for it. */
+    val decorationHeight: Int get() = 0
+
+    /** The bar's colors, as ARGB: background, title, close button. */
+    val decorationColors: IntArray get() = intArrayOf(0xFF24283B.toInt(), 0xFFC0CAF5.toInt(), 0xFF565F89.toInt())
+
     /** The app under the pointer now draws its own cursor ([provided]), or stopped: the launcher's arrow steps aside. */
     fun cursorChanged(provided: Boolean) {}
 

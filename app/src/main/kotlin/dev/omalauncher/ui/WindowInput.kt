@@ -72,6 +72,16 @@ private suspend fun PointerInputScope.handlePointer(
         change.consume()
         if (!wm.onPress(window, hit) || hit == null) continue
 
+        // The launcher's bar over a floating window: dragging it moves the window, as the pointer does.
+        if (hit.decoration != null) {
+            if (hit.onClose) {
+                wm.click(hit, BTN_LEFT)
+            } else {
+                dragBar(wm, window, change)
+            }
+            continue
+        }
+
         // Clients with wl_touch (foot, GTK) get real touch, every finger of it: foot turns
         // hold-and-drag into selection, and apps see pinches and two-finger gestures.
         if (wm.wantsTouch(hit.surface)) {
@@ -115,6 +125,23 @@ private suspend fun PointerInputScope.handlePointer(
             last = c.position
         }
     }
+}
+
+/** A finger on the launcher's bar: the window follows it until it lifts, through the same path as the pointer. */
+private suspend fun AwaitPointerEventScope.dragBar(
+    wm: WindowManager,
+    window: XdgToplevel,
+    first: PointerInputChange,
+) {
+    wm.pointerAt(window, first.position.x, first.position.y)
+    wm.pointerButton(BTN_LEFT, true)
+    while (true) {
+        val c = awaitPointerEvent().changes.firstOrNull { it.id == first.id } ?: break
+        if (c.isConsumed || !c.pressed) break
+        c.consume()
+        wm.pointerAt(window, c.position.x, c.position.y)
+    }
+    wm.pointerButton(BTN_LEFT, false)
 }
 
 /**

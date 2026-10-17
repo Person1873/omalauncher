@@ -51,6 +51,30 @@ class WindowManager : WindowManagerHooks {
         main.post { if (enabled) textFields[window] = purpose else textFields.remove(window) }
     }
 
+    override var decorationHeight = 0
+    override var decorationColors = super.decorationColors
+
+    /**
+     * A press on the launcher's bar over a floating window: the window follows the drag, and a press on the
+     * close button that hasn't moved asks it to close. None of it reaches the app.
+     */
+    private var barPress: SurfaceHit? = null
+    private var barPressAt = 0f to 0f
+
+    /** The window an app asked to move (its own title bar dragged), and where the drag holds it. */
+    private var moving: XdgToplevel? = null
+    private var movingGrip = 0f to 0f
+
+    override fun moveRequested(toplevel: XdgToplevel) {
+        main.post {
+            val at = server.input.dragPoint ?: return@post
+            val pos = toplevel.position ?: return@post
+            if (toplevel.host == null || toplevel.fullscreen) return@post
+            moving = toplevel
+            movingGrip = at.first - pos.first to at.second - pos.second
+        }
+    }
+
     /** The app under the pointer draws its own cursor: the touchpad mode shows that instead of the launcher's arrow. */
     var clientCursor by mutableStateOf(false)
         private set
@@ -218,12 +242,17 @@ class WindowManager : WindowManagerHooks {
         y: Float,
     ) {
         server.input.dragPoint = x to y
+        moving?.let { m ->
+            synchronized(server) { m.position = x - movingGrip.first to y - movingGrip.second }
+            window.renderer?.requestFrame()
+        }
         if (server.input.drag != null) window.renderer?.requestFrame()
     }
 
     /** Nothing's held any more. */
     fun endDrag() {
         server.input.dragPoint = null
+        moving = null
     }
 
     /** The surface a held button was pressed on: the pointer stays with it, wherever it goes, until release. */
@@ -246,14 +275,23 @@ class WindowManager : WindowManagerHooks {
     /** Where the pointer was last sent; input runs on its own thread, so this is ahead of Input's own focus. */
     private var pointerSurface: Surface? = null
 
-    /** The pointer's last position in view pixels, through [pointerAt]. */
+    /** The pointer's last position in view pixels, through [pointerAt], and what it was over. */
     private var pointerPoint: Pair<Float, Float>? = null
+    private var pointerHit: SurfaceHit? = null
 
     /** Moves the pointer onto [hit]; [under] is what's under it, which a drag and drop goes by (see [pointerAt]). */
     fun pointerMove(
         hit: SurfaceHit?,
         under: SurfaceHit? = hit,
     ) {
+        pointerHit = hit
+        // Over the launcher's bar, or dragging it: the app hears the pointer left, and nothing more.
+        if (barPress != null) return
+        if (hit?.decoration != null) {
+            pointerSurface = null
+            server.postInput { pointerMotion(null, 0f, 0f) }
+            return
+        }
         pointerSurface = hit?.surface
         server.postInput { pointerMotion(hit?.surface, hit?.x ?: 0f, hit?.y ?: 0f, under) }
     }
@@ -266,10 +304,30 @@ class WindowManager : WindowManagerHooks {
             if (heldButtons.isEmpty()) {
                 grabbed = pointerSurface
                 server.input.dragPoint = pointerPoint
+                val bar = pointerHit?.decoration
+                val pos = bar?.position
+                val at = pointerPoint
+                if (bar != null && pos != null && at != null) {
+                    barPress = pointerHit
+                    barPressAt = at
+                    moving = bar
+                    movingGrip = at.first - pos.first to at.second - pos.second
+                }
             }
             heldButtons += button
+            if (barPress != null) return
         } else {
             heldButtons -= button
+            barPress?.let { press ->
+                if (heldButtons.isNotEmpty()) return
+                barPress = null
+                val at = pointerPoint ?: barPressAt
+                val still = kotlin.math.abs(at.first - barPressAt.first) + kotlin.math.abs(at.second - barPressAt.second) < 24f
+                if (press.onClose && still) press.decoration?.let(::close)
+                grabbed = null
+                endDrag()
+                return
+            }
             if (heldButtons.isEmpty()) {
                 grabbed = null
                 endDrag()
@@ -279,6 +337,15 @@ class WindowManager : WindowManagerHooks {
     }
 
     fun click(
+        hit: SurfaceHit,
+        button: Int,
+    ) {
+        // A tap on the launcher's bar: its close button closes the window; the rest of it does nothing on a tap.
+        hit.decoration?.let { if (hit.onClose) close(it) }
+        if (hit.decoration == null) clickApp(hit, button)
+    }
+
+    private fun clickApp(
         hit: SurfaceHit,
         button: Int,
     ) = server.postInput {
