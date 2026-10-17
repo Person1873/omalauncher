@@ -1,6 +1,7 @@
 /*
  * omalauncher-portal: the file chooser portal (org.freedesktop.portal.FileChooser)
- * for Linux apps in omalauncher.
+ * and the notification service (org.freedesktop.Notifications) for Linux apps
+ * in omalauncher.
  *
  * It's the portal service itself, not a backend for xdg-desktop-portal: that
  * one identifies each caller through /proc/<pid>/root, which under proot
@@ -238,28 +239,116 @@ static GVariant *get_property(GDBusConnection *conn, const gchar *sender, const 
 
 static const GDBusInterfaceVTable vtable = {method_call, get_property, NULL, {0}};
 
-static void bus_acquired(GDBusConnection *conn, const gchar *name, gpointer user_data) {
-    bus = conn;
-    request_info = g_dbus_node_info_new_for_xml(request_xml, NULL);
-    GDBusNodeInfo *info = g_dbus_node_info_new_for_xml(introspection_xml, NULL);
+/* ---- Notifications (org.freedesktop.Notifications): notify-send and apps' notifications become Android ones. ---- */
+
+#define NOTIFY_NAME "org.freedesktop.Notifications"
+#define NOTIFY_PATH "/org/freedesktop/Notifications"
+
+static const gchar notify_xml[] =
+    "<node>"
+    "  <interface name='org.freedesktop.Notifications'>"
+    "    <method name='GetCapabilities'><arg type='as' direction='out'/></method>"
+    "    <method name='Notify'>"
+    "      <arg type='s' direction='in'/><arg type='u' direction='in'/><arg type='s' direction='in'/>"
+    "      <arg type='s' direction='in'/><arg type='s' direction='in'/><arg type='as' direction='in'/>"
+    "      <arg type='a{sv}' direction='in'/><arg type='i' direction='in'/><arg type='u' direction='out'/>"
+    "    </method>"
+    "    <method name='CloseNotification'><arg type='u' direction='in'/></method>"
+    "    <method name='GetServerInformation'>"
+    "      <arg type='s' direction='out'/><arg type='s' direction='out'/><arg type='s' direction='out'/><arg type='s' direction='out'/>"
+    "    </method>"
+    "    <signal name='NotificationClosed'><arg type='u'/><arg type='u'/></signal>"
+    "    <signal name='ActionInvoked'><arg type='u'/><arg type='s'/></signal>"
+    "  </interface>"
+    "</node>";
+
+/* One line to the launcher; never waits: with nothing reading, the notification is dropped. */
+static void tell_launcher(const gchar *line) {
+    gchar *bridge = g_strdup_printf("%s/open.fifo", runtime_dir);
+    int fd = open(bridge, O_WRONLY | O_NONBLOCK);
+    g_free(bridge);
+    if (fd < 0) return;
+    ssize_t n = write(fd, line, strlen(line));
+    (void) n;
+    close(fd);
+}
+
+/* Fits a field on the bridge's one line: tabs become spaces, and backslashes and newlines are escaped. */
+static gchar *escape(const gchar *s) {
+    GString *out = g_string_new(NULL);
+    for (const gchar *p = s ? s : ""; *p; p++) {
+        if (*p == '\\') g_string_append(out, "\\\\");
+        else if (*p == '\n') g_string_append(out, "\\n");
+        else if (*p == '\t' || *p == '\r') g_string_append_c(out, ' ');
+        else g_string_append_c(out, *p);
+    }
+    return g_string_free(out, FALSE);
+}
+
+static void notify_call(GDBusConnection *conn, const gchar *sender, const gchar *path, const gchar *iface, const gchar *method,
+                        GVariant *params, GDBusMethodInvocation *invocation, gpointer user_data) {
+    static guint32 counter;
+    if (g_strcmp0(method, "GetCapabilities") == 0) {
+        const gchar *caps[] = {"body", NULL};
+        g_dbus_method_invocation_return_value(invocation, g_variant_new("(^as)", caps));
+    } else if (g_strcmp0(method, "GetServerInformation") == 0) {
+        g_dbus_method_invocation_return_value(invocation, g_variant_new("(ssss)", "omalauncher", "omalauncher", "1", "1.2"));
+    } else if (g_strcmp0(method, "Notify") == 0) {
+        const gchar *app, *icon, *summary, *body;
+        guint32 replaces;
+        g_variant_get(params, "(&su&s&s&s@as@a{sv}i)", &app, &replaces, &icon, &summary, &body, NULL, NULL, NULL);
+        guint32 id = replaces ? replaces : ++counter;
+        gchar *a = escape(app), *t = escape(summary), *b = escape(body);
+        gchar *line = g_strdup_printf("omarchy-notify:%u\t%s\t%s\t%s\n", id, a, t, b);
+        tell_launcher(line);
+        g_free(line), g_free(a), g_free(t), g_free(b);
+        g_dbus_method_invocation_return_value(invocation, g_variant_new("(u)", id));
+    } else if (g_strcmp0(method, "CloseNotification") == 0) {
+        guint32 id;
+        g_variant_get(params, "(u)", &id);
+        gchar *line = g_strdup_printf("omarchy-notify-close:%u\n", id);
+        tell_launcher(line);
+        g_free(line);
+        g_dbus_connection_emit_signal(conn, NULL, NOTIFY_PATH, NOTIFY_NAME, "NotificationClosed", g_variant_new("(uu)", id, 3), NULL);
+        g_dbus_method_invocation_return_value(invocation, NULL);
+    }
+}
+
+static const GDBusInterfaceVTable notify_vtable = {notify_call, NULL, NULL, {0}};
+
+static void name_lost(GDBusConnection *conn, const gchar *name, gpointer user_data) {
+    g_printerr("omalauncher-portal: couldn't own %s\n", name);
+    /* No bus at all: nothing left to serve. One name taken by someone else: the other still works. */
+    if (conn == NULL) g_main_loop_quit(user_data);
+}
+
+static void serve(GDBusConnection *conn, const gchar *path, const gchar *xml, const GDBusInterfaceVTable *vt) {
+    GDBusNodeInfo *info = g_dbus_node_info_new_for_xml(xml, NULL);
     GError *error = NULL;
-    if (!g_dbus_connection_register_object(conn, OBJECT_PATH, info->interfaces[0], &vtable, NULL, NULL, &error)) {
+    if (!g_dbus_connection_register_object(conn, path, info->interfaces[0], vt, NULL, NULL, &error)) {
         g_printerr("omalauncher-portal: %s\n", error->message);
         g_error_free(error);
     }
     g_dbus_node_info_unref(info);
 }
 
-static void name_lost(GDBusConnection *conn, const gchar *name, gpointer user_data) {
-    g_printerr("omalauncher-portal: couldn't own %s\n", name);
-    g_main_loop_quit(user_data);
-}
-
 int main(void) {
     runtime_dir = g_getenv("XDG_RUNTIME_DIR");
     if (!runtime_dir) runtime_dir = "/run/user/0";
+    GError *error = NULL;
+    bus = g_bus_get_sync(G_BUS_TYPE_SESSION, NULL, &error);
+    if (!bus) {
+        g_printerr("omalauncher-portal: %s\n", error->message);
+        return 1;
+    }
     GMainLoop *loop = g_main_loop_new(NULL, FALSE);
-    g_bus_own_name(G_BUS_TYPE_SESSION, BUS_NAME, G_BUS_NAME_OWNER_FLAGS_NONE, bus_acquired, NULL, name_lost, loop, NULL);
+    /* Objects first, then the names: a call can come as soon as a name is ours. Both run in one process,
+     * started by whichever the bus is asked for first. */
+    request_info = g_dbus_node_info_new_for_xml(request_xml, NULL);
+    serve(bus, OBJECT_PATH, introspection_xml, &vtable);
+    serve(bus, NOTIFY_PATH, notify_xml, &notify_vtable);
+    g_bus_own_name_on_connection(bus, BUS_NAME, G_BUS_NAME_OWNER_FLAGS_NONE, NULL, name_lost, loop, NULL);
+    g_bus_own_name_on_connection(bus, NOTIFY_NAME, G_BUS_NAME_OWNER_FLAGS_NONE, NULL, name_lost, loop, NULL);
     g_main_loop_run(loop);
     return 0;
 }

@@ -29,6 +29,7 @@ import dev.omalauncher.linux.OpenBridge
 import dev.omalauncher.linux.Pacman
 import dev.omalauncher.linux.Proot
 import dev.omalauncher.linux.GuestLocale
+import dev.omalauncher.linux.LinuxNotifications
 import dev.omalauncher.linux.SessionBus
 import dev.omalauncher.linux.SystemUpdates
 import dev.omalauncher.linux.LauncherFont
@@ -92,7 +93,7 @@ class Runtime(
     private val audio = AudioBridge(proot)
     private val sessionBus = SessionBus(proot)
     private val guestLocale = GuestLocale(context, proot)
-    private val openBridge = OpenBridge(context, proot, onOpenFiles = ::openFiles, onEdit = ::edit, onPick = ::pick)
+    private val openBridge = OpenBridge(context, proot, onOpenFiles = ::openFiles, onEdit = ::edit, onPick = ::pick, notifications = LinuxNotifications(context))
     val agents = AgentStore(proot, onChanged = ::syncGuest)
     val pacman = Pacman(context, proot)
     val widgets = WidgetEngine(context, proot, this)
