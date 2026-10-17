@@ -32,6 +32,7 @@ import dev.omalauncher.linux.Pacman
 import dev.omalauncher.linux.Proot
 import dev.omalauncher.linux.LinuxState
 import dev.omalauncher.linux.GuestLocale
+import dev.omalauncher.linux.GuestPortal
 import dev.omalauncher.linux.LinuxNotifications
 import dev.omalauncher.linux.SessionBus
 import dev.omalauncher.linux.SystemUpdates
@@ -127,6 +128,7 @@ class Runtime(
             listOf(
                 { defaultApps(proot.applications) },
                 { bundledIcons(context, proot.home) },
+                GuestPortal(context, proot)::managed,
                 openBridge::managed,
                 pacman::managed,
                 agents::managed,
