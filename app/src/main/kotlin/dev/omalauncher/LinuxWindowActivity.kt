@@ -165,7 +165,7 @@ private fun AppWindow(
     window: XdgToplevel,
 ) {
     var sink by remember { mutableStateOf<KeyboardSink?>(null) }
-    // A text field getting focus brings the soft keyboard up, the right one for it (a number pad for numbers), and
+    // A text field the user taps brings the soft keyboard up, the right one for it (a number pad for numbers), and
     // takes it down again when it loses focus; not one the user opened, and none with a hardware keyboard.
     val field = runtime.wm.textField(window)
     val config = LocalConfiguration.current
@@ -173,9 +173,9 @@ private fun AppWindow(
     var autoShown by remember { mutableStateOf(false) }
     LaunchedEffect(field, sink, hardKeyboard) {
         val s = sink ?: return@LaunchedEffect
-        s.purpose = field ?: 0
+        s.purpose = field?.purpose ?: 0
         if (field != null) {
-            if (!hardKeyboard && !s.wanted) {
+            if (field.tapped && !hardKeyboard && !s.wanted) {
                 s.show()
                 autoShown = true
             }
