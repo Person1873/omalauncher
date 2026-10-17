@@ -49,6 +49,7 @@ class WaylandServer(
             Global("wl_data_device_manager", 3, ::DataDeviceManager),
             Global("xdg_wm_base", 3, ::XdgWmBase),
             Global("zxdg_decoration_manager_v1", 1, ::DecorationManager),
+            Global("org_kde_kwin_server_decoration_manager", 1, ::ServerDecorationManager),
         )
 
     val clients = mutableListOf<Client>()
