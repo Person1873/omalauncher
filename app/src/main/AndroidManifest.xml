@@ -226,6 +226,31 @@
             android:theme="@style/Theme.Omalauncher.Window"
             android:windowSoftInputMode="adjustResize" />
 
+        <!-- "Open in Linux" in Android's share sheet and Open with: files go into Linux and open in a Linux app. -->
+        <activity
+            android:name=".OpenInLinuxActivity"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboard|keyboardHidden|navigation|density|uiMode"
+            android:excludeFromRecents="true"
+            android:exported="true"
+            android:icon="@drawable/files"
+            android:label="Open in Linux"
+            android:resizeableActivity="true"
+            android:taskAffinity="dev.omalauncher.openin"
+            android:theme="@style/Theme.Omalauncher.Window">
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:scheme="content" />
+                <data android:mimeType="*/*" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.SEND" />
+                <action android:name="android.intent.action.SEND_MULTIPLE" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="*/*" />
+            </intent-filter>
+        </activity>
+
         <!-- A Linux app's file dialog, over the app; gone once it answers (see FilePickActivity). -->
         <activity
             android:name=".FilePickActivity"
