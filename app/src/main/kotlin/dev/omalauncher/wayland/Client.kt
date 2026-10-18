@@ -60,6 +60,8 @@ fun interface Deferred {
 class Client(
     val server: WaylandServer,
     private val fd: Int,
+    /** Its process (SO_PEERCRED), for ending one that keeps running after its windows closed; 0 if unknown. */
+    val pid: Int = 0,
 ) {
     val objects = HashMap<Int, Resource>()
     private val fds = ArrayDeque<Int>()

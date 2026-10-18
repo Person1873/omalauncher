@@ -1,10 +1,13 @@
 package dev.omalauncher.wayland
 
+import android.net.LocalServerSocket
 import android.os.Handler
 import android.os.Looper
+import android.os.ParcelFileDescriptor
 import android.os.SystemClock
 import android.util.Log
 import android.view.Choreographer
+import java.io.IOException
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicInteger
 import kotlin.concurrent.thread
@@ -102,22 +105,36 @@ class WaylandServer(
     private val serial = AtomicInteger(1)
     private var listenFd = -1
 
+    /** Owns [listenFd] once serving; held so it isn't closed when collected. */
+    private var listener: ParcelFileDescriptor? = null
+
     fun nextSerial() = serial.getAndIncrement()
 
     fun start() {
         listenFd = Native.listen(socketPath)
         check(listenFd >= 0) { "cannot listen on $socketPath: errno ${-listenFd}" }
         Log.i(TAG, "listening on $socketPath")
+        // Accepted through Android's own socket class: it alone hands out a client's credentials (its pid, for
+        // ending an app that lingers without windows). The connection's fd then goes on as before.
+        val listener = ParcelFileDescriptor.adoptFd(listenFd).also { this.listener = it }
+        val sockets = LocalServerSocket(listener.fileDescriptor)
         thread(name = "wl-accept", isDaemon = true) {
             while (true) {
-                val fd = Native.accept(listenFd)
-                if (fd < 0) {
-                    // Transient (a client gave up, out of fds): keep serving after a pause.
-                    Log.w(TAG, "accept failed: errno ${-fd}")
-                    SystemClock.sleep(100)
-                    continue
-                }
-                val client = Client(this, fd)
+                val socket =
+                    try {
+                        sockets.accept()
+                    } catch (e: IOException) {
+                        // Transient (a client gave up, out of fds): keep serving after a pause.
+                        Log.w(TAG, "accept failed: $e")
+                        SystemClock.sleep(100)
+                        continue
+                    }
+                // proot doesn't fake pids: this is the app's real one.
+                val pid = runCatching { socket.peerCredentials.pid }.getOrDefault(0)
+                val fd = runCatching { ParcelFileDescriptor.dup(socket.fileDescriptor).detachFd() }.getOrDefault(-1)
+                socket.close()
+                if (fd < 0) continue
+                val client = Client(this, fd, pid)
                 synchronized(this) { clients += client }
                 thread(name = "wl-client-$fd", isDaemon = true) { client.run() }
             }

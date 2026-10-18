@@ -115,7 +115,7 @@ class LinuxWindowActivity : InstantActivity() {
     override fun onDestroy() {
         super.onDestroy()
         val w = window ?: return
-        if (isFinishing && w in runtime.wm.appWindows) runtime.wm.close(w)
+        if (isFinishing && w in runtime.wm.appWindows) runtime.wm.closeFromRecents(w)
     }
 
     // Lint flags super.dispatchKeyEvent: ComponentActivity marks its override @RestrictTo, but Activity's is public API.

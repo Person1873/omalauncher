@@ -2,6 +2,7 @@ package dev.omalauncher.ui
 
 import android.os.Handler
 import android.os.Looper
+import android.os.Process
 import android.os.SystemClock
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
@@ -14,10 +15,16 @@ import dev.omalauncher.wayland.SurfaceHit
 import dev.omalauncher.wayland.WaylandServer
 import dev.omalauncher.wayland.WindowManagerHooks
 import dev.omalauncher.wayland.XdgToplevel
+import java.io.File
 import kotlin.math.abs
 
 /** How soon after a tap a text field's focus counts as the tap's: apps under proot can take a while to react. */
 private const val TAP_FOCUS_MS = 1500L
+
+/** How long an app gets to close a window swiped away in Recents, and then to exit once told to. */
+private const val CLOSE_GRACE_MS = 5000L
+private const val KILL_GRACE_MS = 3000L
+private const val SIGTERM = 15
 
 /** How long a text field's focus has to hold before the keyboard follows it. */
 private const val SETTLE_MS = 150L
@@ -150,6 +157,30 @@ class WindowManager : WindowManagerHooks {
     fun windowByHandle(handle: String?) = handle?.let(handles::get)
 
     fun handleOf(window: XdgToplevel) = handles.entries.firstOrNull { it.value === window }?.key
+
+    /**
+     * Its card swiped away in Recents: asks the app to close [window], as a desktop's close button does, then
+     * makes sure it did. An app that's still showing it (asking to save, most likely) comes back up so it can be
+     * answered; one left running without any window is ended, or it would hold on to memory, and a
+     * single-instance app (FreeCAD) would take every later launch without ever showing it.
+     */
+    fun closeFromRecents(window: XdgToplevel) {
+        close(window)
+        main.postDelayed({ settleClose(window) }, CLOSE_GRACE_MS)
+    }
+
+    private fun settleClose(window: XdgToplevel) {
+        if (window in appWindows) {
+            handleOf(window)?.let(openAppWindow)
+            return
+        }
+        val client = window.client
+        val windowsLeft = synchronized(server) { client.all(XdgToplevel::class.java).any { !it.surface.destroyed } }
+        val pid = client.pid
+        if (windowsLeft || pid <= 0 || !File("/proc/$pid").exists()) return
+        Process.sendSignal(pid, SIGTERM)
+        main.postDelayed({ if (File("/proc/$pid").exists()) Process.sendSignal(pid, Process.SIGNAL_KILL) }, KILL_GRACE_MS)
+    }
 
     /** Pixels per logical pixel (the wl_output scale). */
     val scale get() = server.output.scale
