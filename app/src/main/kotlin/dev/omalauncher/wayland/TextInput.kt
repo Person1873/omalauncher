@@ -45,7 +45,6 @@ class TextInput(
     /** Whether it shows a text cursor (set_cursor_rectangle with a size); null until the client says. */
     private var pendingCaret: Boolean? = null
     private var caret: Boolean? = null
-    private var commits = 0
 
     override fun request(
         opcode: Int,
@@ -72,7 +71,6 @@ class TextInput(
     }
 
     private fun commit() {
-        commits++
         val surface = focus
         val changed = pendingEnabled != enabled || (enabled && (pendingPurpose != purpose || pendingCaret != caret))
         if (changed && surface != null) {
@@ -87,7 +85,8 @@ class TextInput(
             pendingPurpose = 0
             pendingCaret = null
         }
-        send(event(5).uint(commits)) // done: nothing pending from us
+        // No done event: it applies what the compositor composed, and with nothing composed, Qt takes it as an
+        // empty string typed over the selection (FreeCAD's on-view dimensions lost their value to it).
     }
 
     fun enter(surface: Surface) {
