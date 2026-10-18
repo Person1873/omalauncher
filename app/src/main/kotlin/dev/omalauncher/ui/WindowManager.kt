@@ -8,6 +8,7 @@ import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import dev.omalauncher.wayland.Caret
 import dev.omalauncher.wayland.Keys
 import dev.omalauncher.wayland.Surface
 import dev.omalauncher.wayland.SurfaceHit
@@ -51,21 +52,35 @@ class WindowManager : WindowManagerHooks {
     /** The focused text field in [window], or null when none has focus. */
     fun textField(window: XdgToplevel) = textFields[window]
 
-    /** When the user last pressed or tapped in a window; a field enabled soon after got its focus from them. */
-    @Volatile private var touchedAt = 0L
+    /** Where and when the user last pressed or tapped in an app; a field enabled soon after, there, got its focus from them. */
+    private data class Tap(
+        val surface: Surface,
+        val x: Float,
+        val y: Float,
+        val at: Long,
+    )
 
-    private fun touched() {
-        touchedAt = SystemClock.uptimeMillis()
+    @Volatile private var lastTap: Tap? = null
+
+    private fun touched(hit: SurfaceHit?) {
+        lastTap = hit?.takeIf { it.decoration == null }?.let { Tap(it.surface, it.x, it.y, SystemClock.uptimeMillis()) }
     }
 
     override fun textInputChanged(
         surface: Surface,
         enabled: Boolean,
         purpose: Int,
+        caret: Caret?,
     ) {
         val top = server.toplevelOf(surface) ?: return
         val window = top.host ?: top
-        val tapped = SystemClock.uptimeMillis() - touchedAt < TAP_FOCUS_MS
+        // A tap that lands somewhere else can move focus to a field too (a CAD app's tool fills in its task
+        // panel): only one on the field itself counts, as near as its cursor tells.
+        val tap = lastTap
+        val tapped =
+            tap != null &&
+                SystemClock.uptimeMillis() - tap.at < TAP_FOCUS_MS &&
+                (caret == null || (tap.surface === surface && caret.near(tap.x, tap.y)))
         main.post { if (enabled) textFields[window] = TextField(purpose, tapped) else textFields.remove(window) }
     }
 
@@ -318,7 +333,7 @@ class WindowManager : WindowManagerHooks {
         button: Int,
         pressed: Boolean,
     ) {
-        touched()
+        touched(pointerHit)
         if (pressed) {
             if (heldButtons.isEmpty()) {
                 grabbed = pointerSurface
@@ -359,7 +374,7 @@ class WindowManager : WindowManagerHooks {
         hit: SurfaceHit,
         button: Int,
     ) {
-        touched()
+        touched(hit)
         // A tap on the launcher's bar: its close button closes the window; the rest of it does nothing on a tap.
         hit.decoration?.let { if (hit.onClose) close(it) }
         if (hit.decoration == null) clickApp(hit, button)
@@ -387,7 +402,7 @@ class WindowManager : WindowManagerHooks {
         hit: SurfaceHit,
         id: Int,
     ) {
-        touched()
+        touched(hit)
         server.postInput { touchDown(hit.surface, id, hit.x, hit.y) }
     }
 
@@ -400,7 +415,8 @@ class WindowManager : WindowManagerHooks {
     ) = server.postInput { touchMotion(id, x, y, under) }
 
     fun touchUp(id: Int) {
-        touched()
+        // The tap is where the finger went down; it's as recent as its lift.
+        lastTap = lastTap?.copy(at = SystemClock.uptimeMillis())
         server.postInput { touchUp(id) }
     }
 

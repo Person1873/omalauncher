@@ -42,12 +42,14 @@ interface WindowManagerHooks {
 
     /**
      * A text field in [surface] got focus ([enabled]) or lost it: the soft keyboard follows. [purpose] is what
-     * it's for, as text_input_v3's content purpose (2 digits, 3 number, 4 phone, 9 pin; 0 plain text).
+     * it's for, as text_input_v3's content purpose (2 digits, 3 number, 4 phone, 9 pin; 0 plain text), and
+     * [caret] where its text cursor is, if the client said.
      */
     fun textInputChanged(
         surface: Surface,
         enabled: Boolean,
         purpose: Int,
+        caret: Caret?,
     ) {}
 }
 
