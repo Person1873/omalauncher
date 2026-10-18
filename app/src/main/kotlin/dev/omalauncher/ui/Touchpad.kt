@@ -1,5 +1,7 @@
 package dev.omalauncher.ui
 
+import android.os.Handler
+import android.os.Looper
 import androidx.compose.foundation.Canvas
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -44,12 +46,18 @@ class TouchpadState(
     /** The window view's size, which the cursor stays inside. */
     var bounds = IntSize.Zero
 
-    internal var lastTapUp = 0L
-    internal var lastTapValid = false
+    /**
+     * A tap's left button, still down for a moment in case a touch follows (a drag, or a second tap for a double
+     * click), as a laptop's touchpad does; its release when none does. A tap that clicked at once would make the
+     * drag's press the second click of a double click, which CAD apps take as something else than a drag.
+     */
+    internal var tapHeld: Runnable? = null
 }
 
+private val main = Handler(Looper.getMainLooper())
+
 private const val TAP_MS = 220L
-private const val TAP_GAP_MS = 300L
+private const val TAP_GAP_MS = 250L
 private const val SPEED = 1.2f
 private const val ACCEL = 0.8f
 
@@ -103,8 +111,14 @@ internal suspend fun AwaitPointerEventScope.touchpadGesture(
     }
 
     wm.pointerMove(hitAtCursor())
-    // Tap, then touch again soon after: the left button stays down for a drag, or makes a double click.
-    val dragging = state.lastTapValid && start - state.lastTapUp < TAP_GAP_MS && press(BTN_LEFT)
+    // Tap, then touch again soon after: the tap's left button is still down, and stays down for a drag, or
+    // makes a double click.
+    val dragging =
+        state.tapHeld?.let {
+            main.removeCallbacks(it)
+            state.tapHeld = null
+            held = BTN_LEFT
+        } != null
     var event = first
     while (true) {
         val fingers = event.changes.count { it.pressed }
@@ -134,22 +148,26 @@ internal suspend fun AwaitPointerEventScope.touchpadGesture(
     }
 
     val tap = lastTime - start < TAP_MS && travel < touchSlop
-    state.lastTapValid = false
     when {
         maxFingers == 1 && held == BTN_LEFT -> {
             release()
-            // The second tap of a double click can start a triple.
-            state.lastTapValid = tap
+            // Tap, tap: a double click.
+            if (dragging && tap) click(BTN_LEFT)
         }
-        maxFingers == 1 && tap -> {
-            click(BTN_LEFT)
-            state.lastTapValid = true
+        maxFingers == 1 && tap && press(BTN_LEFT) -> {
+            // Down now, up in a moment unless a touch follows.
+            held = 0
+            val up = Runnable {
+                state.tapHeld = null
+                wm.pointerButton(BTN_LEFT, false)
+            }
+            state.tapHeld = up
+            main.postDelayed(up, TAP_GAP_MS)
         }
         maxFingers == 2 -> if (scrolled) wm.scrollStop() else if (lastTime - start < TAP_MS * 3 / 2) click(BTN_RIGHT)
         maxFingers >= 3 -> if (held != 0) release() else if (lastTime - start < TAP_MS * 3 / 2) click(BTN_MIDDLE)
     }
     release()
-    state.lastTapUp = lastTime
 }
 
 private val ARROW = listOf(0f to 0f, 0f to 16f, 4f to 12.5f, 6.8f to 18.6f, 9.2f to 17.6f, 6.5f to 11.6f, 11.5f to 11.6f)
