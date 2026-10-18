@@ -47,6 +47,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
+import dev.omalauncher.linux.LinuxDialogs
 import dev.omalauncher.ui.ExtraKeys
 import dev.omalauncher.ui.KeyboardSink
 import dev.omalauncher.ui.Mono
@@ -79,6 +80,16 @@ class LinuxWindowActivity : InstantActivity() {
             return
         }
         this.window = window
+        // Cancel on the notification of its closing question: back in the app, with the question dismissed.
+        intent.getStringExtra(LinuxDialogs.EXTRA_BUTTON)?.let { button ->
+            runtime.answerDialog(
+                intent.data?.lastPathSegment.orEmpty(),
+                intent.getIntExtra(LinuxDialogs.EXTRA_PID, 0),
+                intent.getStringExtra(LinuxDialogs.EXTRA_TITLE).orEmpty(),
+                button,
+                staying = true,
+            )
+        }
         applySystemBars(this, Palette.isLight)
         setInstantContent {
             SystemBarsEffect(this@LinuxWindowActivity)

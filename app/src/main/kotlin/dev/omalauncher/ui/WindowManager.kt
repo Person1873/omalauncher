@@ -24,6 +24,7 @@ private const val TAP_FOCUS_MS = 1500L
 /** How long an app gets to close a window swiped away in Recents, and then to exit once told to. */
 private const val CLOSE_GRACE_MS = 5000L
 private const val KILL_GRACE_MS = 3000L
+private const val BUSY_RECHECK_MS = 2000L
 private const val SIGTERM = 15
 
 /** How long a text field's focus has to hold before the keyboard follows it. */
@@ -158,23 +159,45 @@ class WindowManager : WindowManagerHooks {
 
     fun handleOf(window: XdgToplevel) = handles.entries.firstOrNull { it.value === window }?.key
 
+    /** A window swiped away in Recents is still open, its app asking something first; [pid] is the app's (0 if unknown). */
+    var leftOpen: (window: XdgToplevel, pid: Int) -> Unit = { window, _ -> handleOf(window)?.let(openAppWindow) }
+
+    /** Whether the user is still busy with something an app asked for (a file picker), so asking again waits. */
+    var busy: () -> Boolean = { false }
+
+    /** An app window went away; its handle goes with it. */
+    var closed: (handle: String) -> Unit = {}
+
     /**
      * Its card swiped away in Recents: asks the app to close [window], as a desktop's close button does, then
-     * makes sure it did. An app that's still showing it (asking to save, most likely) comes back up so it can be
-     * answered; one left running without any window is ended, or it would hold on to memory, and a
-     * single-instance app (FreeCAD) would take every later launch without ever showing it.
+     * makes sure it did. An app that's still showing it (asking to save, most likely) is [leftOpen] to ask;
+     * one left running without any window is ended, or it would hold on to memory, and a single-instance app
+     * (FreeCAD) would take every later launch without ever showing it.
      */
     fun closeFromRecents(window: XdgToplevel) {
         close(window)
-        main.postDelayed({ settleClose(window) }, CLOSE_GRACE_MS)
+        main.postDelayed({ settleClose(window, ask = true) }, CLOSE_GRACE_MS)
     }
 
-    private fun settleClose(window: XdgToplevel) {
-        if (window in appWindows) {
-            handleOf(window)?.let(openAppWindow)
+    /**
+     * Its question answered from outside it: [window]'s app gets to close, and is ended if it lingers without one.
+     * One still open after all (a save whose file picker was dismissed, a Cancel) is asked about again.
+     */
+    fun answered(window: XdgToplevel) = main.postDelayed({ settleClose(window, ask = true) }, CLOSE_GRACE_MS)
+
+    private fun settleClose(
+        window: XdgToplevel,
+        ask: Boolean,
+    ) {
+        val client = window.client
+        if (busy()) {
+            main.postDelayed({ settleClose(window, ask) }, BUSY_RECHECK_MS)
             return
         }
-        val client = window.client
+        if (window in appWindows) {
+            if (ask) leftOpen(window, client.pid)
+            return
+        }
         val windowsLeft = synchronized(server) { client.all(XdgToplevel::class.java).any { !it.surface.destroyed } }
         val pid = client.pid
         if (windowsLeft || pid <= 0 || !File("/proc/$pid").exists()) return
@@ -225,6 +248,7 @@ class WindowManager : WindowManagerHooks {
             }
             if (embedded.remove(toplevel)) release(toplevel)
             appWindows -= toplevel
+            handleOf(toplevel)?.let(closed)
             handles.values.remove(toplevel)
             sizes -= toplevel
             if (focused === toplevel) focus(null)

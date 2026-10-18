@@ -52,6 +52,7 @@ class FilePickActivity : InstantActivity() {
     private fun answer(paths: List<String>) {
         val fifo = reply ?: return
         reply = null
+        runtime.picked(fifo)
         val text = (paths.joinToString("\n") + "\n").toByteArray()
         try {
             val fd = Os.open(fifo, OsConstants.O_WRONLY or OsConstants.O_NONBLOCK, 0)
