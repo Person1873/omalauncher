@@ -42,7 +42,9 @@ class TextInput(
     private var enabled = false
     private var pendingPurpose = 0
     private var purpose = 0
-    private var pendingCaret: Caret? = null
+    /** Whether it shows a text cursor (set_cursor_rectangle with a size); null until the client says. */
+    private var pendingCaret: Boolean? = null
+    private var caret: Boolean? = null
     private var commits = 0
 
     override fun request(
@@ -57,7 +59,13 @@ class TextInput(
                 args.uint()
                 pendingPurpose = args.uint()
             }
-            6 -> pendingCaret = Caret(args.int(), args.int(), args.int(), args.int())
+            6 -> { // set_cursor_rectangle: x, y, width, height
+                args.int()
+                args.int()
+                val width = args.int()
+                val height = args.int()
+                pendingCaret = width > 0 || height > 0
+            }
             7 -> commit()
             else -> Unit // surrounding text, change cause: keys carry the typing
         }
@@ -66,10 +74,13 @@ class TextInput(
     private fun commit() {
         commits++
         val surface = focus
-        if ((pendingEnabled != enabled || (enabled && pendingPurpose != purpose)) && surface != null) {
+        val changed = pendingEnabled != enabled || (enabled && (pendingPurpose != purpose || pendingCaret != caret))
+        if (changed && surface != null) {
             enabled = pendingEnabled
             purpose = pendingPurpose
-            client.server.windowManager.textInputChanged(surface, enabled, purpose, pendingCaret)
+            caret = pendingCaret
+            // A client that never says where its cursor is gets the benefit of the doubt.
+            client.server.windowManager.textInputChanged(surface, enabled, purpose, caret ?: true)
         }
         // The next field to enable starts as plain text, unless it says otherwise.
         if (!pendingEnabled) {
@@ -95,7 +106,7 @@ class TextInput(
         if (enabled) {
             enabled = false
             pendingEnabled = false
-            client.server.windowManager.textInputChanged(surface, false, 0, null)
+            client.server.windowManager.textInputChanged(surface, false, 0, false)
         }
     }
 
@@ -104,27 +115,3 @@ class TextInput(
     }
 }
 
-/** A text field's cursor (set_cursor_rectangle), in its surface's coordinates. */
-data class Caret(
-    val x: Int,
-    val y: Int,
-    val width: Int,
-    val height: Int,
-) {
-    /**
-     * Whether ([px], [py]) is likely on the field this cursor is in: its line, and not too far along it. The
-     * cursor is all a client tells of the field, so this guesses the rest.
-     */
-    fun near(
-        px: Float,
-        py: Float,
-    ): Boolean {
-        val h = maxOf(height, 16)
-        return py >= y - h && py <= y + 2 * h && px >= x - FIELD_REACH && px <= x + width + FIELD_REACH
-    }
-
-    private companion object {
-        /** How far from the cursor a tap can land and still be on its field, in surface units. */
-        const val FIELD_REACH = 400
-    }
-}
