@@ -322,6 +322,10 @@
             </intent-filter>
         </service>
 
+        <receiver
+            android:name=".linux.LinuxDialogReceiver"
+            android:exported="false" />
+
         <service
             android:name=".LinuxService"
             android:exported="false"

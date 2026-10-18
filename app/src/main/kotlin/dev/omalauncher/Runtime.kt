@@ -26,6 +26,7 @@ import dev.omalauncher.linux.EDIT_COMMAND
 import dev.omalauncher.linux.FILES_COMMAND
 import dev.omalauncher.linux.Gpu
 import dev.omalauncher.linux.LinuxApp
+import dev.omalauncher.linux.LinuxDialogs
 import dev.omalauncher.linux.LinuxDns
 import dev.omalauncher.linux.OpenBridge
 import dev.omalauncher.linux.Pacman
@@ -70,6 +71,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -107,6 +109,7 @@ class Runtime(
     private val audio = AudioBridge(proot)
     private val sessionBus = SessionBus(proot)
     private val guestLocale = GuestLocale(context, proot)
+    private val dialogs = LinuxDialogs(context, proot)
     private val openBridge = OpenBridge(context, proot, onOpenFiles = ::openFiles, onEdit = ::edit, onPick = ::pick, notifications = LinuxNotifications(context))
     val agents = AgentStore(proot, onChanged = ::syncGuest)
     val pacman = Pacman(context, proot)
@@ -186,23 +189,70 @@ class Runtime(
         // A terminal shown again after the text size changed catches up, with foot's own zoom keys.
         wm.created = { window -> if (followsTerminalFont(window.appId)) terminalFont.track(window) }
         wm.focusGained = { window -> wm.zoom(window, terminalFont.catchUp(window)) }
-        wm.openAppWindow = { handle ->
-            // Recents uses the activity's manifest label, not the task description's; see the aliases in the manifest.
-            val window = wm.windowByHandle(handle)
-            val name = window?.let { displayName(it.appId, it.title) }
-            val activity =
-                when (name) {
-                    "Terminal" -> "TerminalWindow"
-                    "btop" -> "BtopWindow"
-                    else -> agentOf(window?.appId.orEmpty(), name)?.windowAlias ?: "LinuxWindowActivity"
+        wm.openAppWindow = { handle -> InstantActivity.startInstantly(context, windowIntent(handle)) }
+        // Swiped away but asking something first: the question goes in a notification, answerable from there.
+        wm.leftOpen = { window, pid ->
+            wm.handleOf(window)?.let { handle ->
+                val app = displayName(window.appId, window.title)
+                scope.launch {
+                    dialogs.post(handle, app, pid, null, windowIntent(handle))
+                    // An app under proot can take a while to ask; the notification gets its buttons once it has.
+                    repeat(DIALOG_TRIES) { attempt ->
+                        if (attempt > 0) delay(DIALOG_PAUSE_MS)
+                        if (wm.handleOf(window) == null) return@launch
+                        val title = synchronized(wm.server) { window.children.lastOrNull()?.title?.ifBlank { null } }
+                        // Without the app's pid, its dialog's title alone finds it.
+                        val dialog = if (pid > 0 || title != null) dialogs.read(pid, title) else null
+                        if (dialog != null) {
+                            dialogs.post(handle, app, pid, dialog, windowIntent(handle))
+                            return@launch
+                        }
+                    }
                 }
-            InstantActivity.startInstantly(
-                context,
-                Intent()
-                    .setClassName(context, "dev.omalauncher.$activity")
-                    .setData(Uri.parse("omarchy://window/$handle"))
-                    .addFlags(Intent.FLAG_ACTIVITY_NEW_DOCUMENT or Intent.FLAG_ACTIVITY_MULTIPLE_TASK),
-            )
+            }
+        }
+        wm.closed = dialogs::cancel
+        // A Save answered from a notification can open a file picker: the app's asked again only once it's done.
+        wm.busy = { synchronized(picks) { picks.isNotEmpty() } }
+    }
+
+    /** Shows the window [handle] names, in its own task. */
+    private fun windowIntent(handle: String): Intent {
+        // Recents uses the activity's manifest label, not the task description's; see the aliases in the manifest.
+        val window = wm.windowByHandle(handle)
+        val name = window?.let { displayName(it.appId, it.title) }
+        val activity =
+            when (name) {
+                "Terminal" -> "TerminalWindow"
+                "btop" -> "BtopWindow"
+                else -> agentOf(window?.appId.orEmpty(), name)?.windowAlias ?: "LinuxWindowActivity"
+            }
+        return Intent()
+            .setClassName(context, "dev.omalauncher.$activity")
+            .setData(Uri.parse("omarchy://window/$handle"))
+            .addFlags(Intent.FLAG_ACTIVITY_NEW_DOCUMENT or Intent.FLAG_ACTIVITY_MULTIPLE_TASK)
+    }
+
+    /**
+     * [button] tapped on a dialog's notification: pressed in the app, which then gets to close; or, [staying]
+     * (Cancel, which opened the window), keeps running in front of the user.
+     */
+    fun answerDialog(
+        handle: String,
+        pid: Int,
+        title: String,
+        button: String,
+        staying: Boolean = false,
+        done: () -> Unit = {},
+    ) {
+        scope.launch {
+            try {
+                dialogs.press(pid, title, button)
+                dialogs.cancel(handle)
+                if (!staying) wm.windowByHandle(handle)?.let(wm::answered)
+            } finally {
+                done()
+            }
         }
     }
 
@@ -617,8 +667,15 @@ class Runtime(
         request: List<String>,
         reply: String,
     ) {
+        synchronized(picks) { picks += reply }
         InstantActivity.startInstantly(context, FilePickActivity.intent(context, request, reply))
     }
+
+    /** The file picker answered the pick that replies on [reply]. */
+    fun picked(reply: String) = synchronized(picks) { picks -= reply }
+
+    /** Picks whose file picker hasn't answered yet, by reply FIFO. */
+    private val picks = HashSet<String>()
 
     /** Opens the Files app, at [path] (a guest path) if given. */
     fun openFiles(path: String? = null) {
@@ -656,6 +713,10 @@ class Runtime(
 
     companion object {
         private const val TAG = "runtime"
+
+        /** How long a closing app gets to show its question: tries, three seconds apart. */
+        private const val DIALOG_TRIES = 7
+        private const val DIALOG_PAUSE_MS = 3000L
         private const val SETUP_DONE = "setup_done"
     }
 }
