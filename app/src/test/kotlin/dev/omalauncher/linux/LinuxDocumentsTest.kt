@@ -217,6 +217,81 @@ class LinuxDocumentsTest {
         assertEquals("print.gcode", LinuxDocuments.safeName(" print.gcode "))
     }
 
+    @Test fun grantCleanupDoesNotCanonicalizeUnrelatedRegularFiles() {
+        val home = tmp.newFolder("home")
+        val bulk = File(home, "unrelated").apply { mkdir() }
+        repeat(500) { File(bulk, "bulk-note-$it").createNewFile() }
+        val target = File(home, "target").apply { writeText("kept") }
+        var unrelatedResolutions = 0
+        val docs = LinuxDocuments(home) { file ->
+            if (file.name.startsWith("bulk-note-")) unrelatedResolutions++
+            file.canonicalFile
+        }
+        assertEquals("home/renamed", docs.rename("home/target", "renamed"))
+        assertEquals("kept", File(home, "renamed").readText())
+        assertEquals("unrelated regular entries must not need canonical-path resolution", 0, unrelatedResolutions)
+        docs.delete("home/renamed")
+        assertEquals("delete must not resolve unrelated regular entries either", 0, unrelatedResolutions)
+        assertEquals(500, bulk.list()!!.size)
+        assertFalse(target.exists())
+    }
+
+    @Test fun grantCleanupScansPhysicalDirectoryAliasesOnlyOnce() {
+        val home = tmp.newFolder("home")
+        val a = File(home, "a").apply { mkdir() }
+        val b = File(a, "b").apply { mkdir() }
+        val c = File(b, "c").apply { mkdir() }
+        File(c, "unrelated").writeText("kept")
+        repeat(8) {
+            Files.createSymbolicLink(File(a, "shortcut-b-$it").toPath(), b.toPath())
+            Files.createSymbolicLink(File(b, "shortcut-c-$it").toPath(), c.toPath())
+        }
+        File(home, "target").writeText("renamed")
+        var aliasResolutions = 0
+        val docs = LinuxDocuments(home) { file ->
+            if (file.name.startsWith("shortcut-")) aliasResolutions++
+            file.canonicalFile
+        }
+        assertEquals("home/renamed", docs.rename("home/target", "renamed"))
+        assertEquals("each physical symlink is resolved once, not once per alias path", 16, aliasResolutions)
+        docs.delete("home/renamed")
+        assertEquals(32, aliasResolutions)
+        assertEquals("kept", File(c, "unrelated").readText())
+    }
+
+    @Test fun grantCleanupStillExpandsNestedAliasPathsWithoutRevokingParents() {
+        val docs = docs()
+        val a = File(docs.home, "a").apply { mkdir() }
+        val b = File(a, "b").apply { mkdir() }
+        File(b, "note").writeText("private")
+        Files.createSymbolicLink(File(docs.home, "shortcut-a").toPath(), a.toPath())
+        Files.createSymbolicLink(File(a, "shortcut-b").toPath(), b.toPath())
+        val invalidated = mutableSetOf<String>()
+        assertEquals("home/a/b/renamed", docs.rename("home/a/b/note", "renamed", invalidated::add))
+        assertEquals(setOf("home/a/shortcut-b/note", "home/shortcut-a/b/note", "home/shortcut-a/shortcut-b/note"), invalidated)
+        assertEquals("private", docs.fileOf("home/shortcut-a/shortcut-b/renamed").readText())
+    }
+
+    @Test fun unreadableDirectoryCannotSilentlyHideAnAffectedGrantedAlias() {
+        val docs = docs()
+        val target = File(docs.home, "target").apply { writeText("private") }
+        val hidden = File(docs.home, "hidden").apply { mkdir() }
+        Files.createSymbolicLink(File(hidden, "alias").toPath(), target.toPath())
+        Files.setPosixFilePermissions(hidden.toPath(), setOf(java.nio.file.attribute.PosixFilePermission.OWNER_EXECUTE))
+        try {
+            org.junit.Assume.assumeFalse("requires permissions enforced for the test user", hidden.canRead())
+            // A known URI remains readable with directory search permission but no listing.
+            assertEquals("private", docs.fileOf("home/hidden/alias").readText())
+            val invalidated = mutableListOf<String>()
+            assertThrows(java.io.IOException::class.java) { docs.rename("home/target", "renamed", invalidated::add) }
+            assertThrows(java.io.IOException::class.java) { docs.delete("home/target", invalidated::add) }
+            assertTrue(invalidated.isEmpty())
+            assertEquals("private", target.readText())
+        } finally {
+            Files.setPosixFilePermissions(hidden.toPath(), setOf(java.nio.file.attribute.PosixFilePermission.OWNER_READ, java.nio.file.attribute.PosixFilePermission.OWNER_WRITE, java.nio.file.attribute.PosixFilePermission.OWNER_EXECUTE))
+        }
+    }
+
     @Test fun takenNamesGetANumber() {
         val dir = Files.createTempDirectory("docs").toFile()
         try {

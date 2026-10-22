@@ -11,7 +11,10 @@ import java.nio.file.SimpleFileVisitor
 import java.nio.file.attribute.BasicFileAttributes
 
 /** Filesystem operations for the home DocumentsProvider, testable without Android. */
-internal class LinuxDocuments(val home: File) {
+internal class LinuxDocuments(
+    val home: File,
+    private val canonicalForScan: (File) -> File = { it.canonicalFile },
+) {
     fun fileOf(documentId: String): File {
         val file = File(home, relativePath(documentId))
         val real = file.canonicalFile
@@ -95,32 +98,56 @@ internal class LinuxDocuments(val home: File) {
     }
 
     private fun affectedIds(documentId: String, file: File): Set<String> {
-        val affected = mutableSetOf(file.canonicalFile.toPath())
+        val affected = mutableSetOf(canonicalForScan(file).toPath())
         // A link removed inside a subtree can invalidate aliases elsewhere in home.
         Files.walkFileTree(file.toPath(), object : SimpleFileVisitor<Path>() {
             override fun visitFile(file: Path, attrs: BasicFileAttributes): FileVisitResult {
                 if (attrs.isSymbolicLink) {
-                    try { affected.add(file.toFile().canonicalFile.toPath()) } catch (_: IOException) { }
+                    try { affected.add(canonicalForScan(file.toFile()).toPath()) } catch (_: IOException) { }
                 }
                 return FileVisitResult.CONTINUE
             }
         })
+        data class Entry(val name: String, val real: Path, val directory: Boolean)
+        fun matches(real: Path) = affected.any { real.startsWith(it) }
+        val graph = mutableMapOf<Path, List<Entry>>()
+        // Discover each physical directory once, not once per lexical alias. Regular
+        // entries inherit their canonical parent's path; only symlinks need resolution.
+        // Keep only edges that lead to affected documents, then expand their lexical ids.
+        fun discover(real: Path): List<Entry> = graph.getOrPut(real) {
+            try {
+                val children = real.toFile().listFiles() ?: throw FileNotFoundException("can't list $real")
+                children.mapNotNull { child ->
+                    try {
+                        validateSegment(child.name)
+                        val attrs = Files.readAttributes(child.toPath(), BasicFileAttributes::class.java, NOFOLLOW_LINKS)
+                        val resolved = if (attrs.isSymbolicLink) canonicalForScan(child).toPath() else real.resolve(child.name)
+                        // Preserve isChild's strict canonical descent, including for directory links.
+                        if (resolved == real || !resolved.startsWith(real)) return@mapNotNull null
+                        val target = if (attrs.isSymbolicLink) Files.readAttributes(resolved, BasicFileAttributes::class.java) else attrs
+                        if (!target.isDirectory && !target.isRegularFile) return@mapNotNull null
+                        Entry(child.name, resolved, target.isDirectory)
+                    } catch (_: IOException) {
+                        null
+                    }
+                }.filter { matches(it.real) || (it.directory && discover(it.real).isNotEmpty()) }
+            } catch (e: IOException) {
+                // An unreadable directory may contain an independently granted alias.
+                // Do not mutate while silently leaving that old grant valid.
+                throw IOException("can't safely enumerate document aliases in $real", e)
+            }
+        }
+        val base = canonicalForScan(home).toPath()
         val ids = mutableSetOf<String>()
-        val pending = ArrayDeque<String>().apply { add(HOME_ID) }
+        val pending = ArrayDeque<Pair<String, Path>>().apply { add(HOME_ID to base) }
         while (pending.isNotEmpty()) {
-            val id = pending.removeLast()
-            val entry = fileOf(id)
-            val real = entry.canonicalFile.toPath()
-            if (!documentId.startsWith("$id/") && affected.any { real.startsWith(it) }) ids.add(id)
-            if (entry.isDirectory) {
-                val children = try {
-                    children(id)
-                } catch (e: IOException) {
-                    if (affected.any { real.startsWith(it) || it.startsWith(real) }) throw e
-                    emptyList()
-                }
-                // Every child descends canonically, so even directory-link traversal cannot cycle.
-                children.forEach { pending.add(childId(id, it.name)) }
+            val (id, real) = pending.removeLast()
+            if (!documentId.startsWith("$id/") && matches(real)) ids.add(id)
+            // discover only takes directories; matched regular files are leaves.
+            discover(real).forEach { child ->
+                val childId = childId(id, child.name)
+                if (child.directory) pending.add(childId to child.real)
+                else if (!documentId.startsWith("$childId/") && matches(child.real)) ids.add(childId)
             }
         }
         return ids
