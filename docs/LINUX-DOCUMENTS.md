@@ -38,8 +38,10 @@ resolve symlinks rather than repeatedly canonicalizing unrelated regular files,
 and expand only affected descendant and alias IDs before changing the filesystem.
 The graph is not retained between operations, so guest-created aliases do not
 rely on a watcher or a stale cache. Discovery still scales with home size; if a
-visible directory cannot be listed, mutation fails rather than silently retaining
-a potentially affected grant. This also conservatively revokes grants to
+searchable directory cannot be listed, mutation fails rather than silently
+retaining a potentially affected grant. Unsearchable mode000 bind placeholders
+cannot expose descendant documents and do not block unrelated mutations. This
+also conservatively revokes grants to
 unchanged aliases of affected linked content;
 those files may need selecting again. Grants to the lexical containing folders
 are retained. A no-op or failed rename revokes nothing; Android handles the

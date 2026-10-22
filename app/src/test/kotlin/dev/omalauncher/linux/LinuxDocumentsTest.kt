@@ -292,6 +292,23 @@ class LinuxDocumentsTest {
         }
     }
 
+    @Test fun unsearchableBindPlaceholderDoesNotBlockUnrelatedMutation() {
+        val docs = docs()
+        val target = File(docs.home, "target").apply { writeText("kept") }
+        val opaque = File(docs.home, "opaque-bind-placeholder").apply { mkdir() }
+        Files.setPosixFilePermissions(opaque.toPath(), emptySet())
+        try {
+            org.junit.Assume.assumeFalse("requires directory search permissions enforced for the test user", opaque.canExecute())
+            assertThrows(FileNotFoundException::class.java) { docs.fileOf("home/opaque-bind-placeholder/anything") }
+            assertEquals("home/renamed", docs.rename("home/target", "renamed"))
+            docs.delete("home/renamed")
+            assertFalse(target.exists())
+            assertTrue(opaque.exists())
+        } finally {
+            Files.setPosixFilePermissions(opaque.toPath(), setOf(java.nio.file.attribute.PosixFilePermission.OWNER_READ, java.nio.file.attribute.PosixFilePermission.OWNER_WRITE, java.nio.file.attribute.PosixFilePermission.OWNER_EXECUTE))
+        }
+    }
+
     @Test fun takenNamesGetANumber() {
         val dir = Files.createTempDirectory("docs").toFile()
         try {
