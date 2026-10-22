@@ -116,7 +116,14 @@ internal class LinuxDocuments(
         // Keep only edges that lead to affected documents, then expand their lexical ids.
         fun discover(real: Path): List<Entry> = graph.getOrPut(real) {
             try {
-                val children = real.toFile().listFiles() ?: throw FileNotFoundException("can't list $real")
+                val directory = real.toFile()
+                val children = directory.listFiles() ?: if (!directory.canExecute()) {
+                    // Proot bind placeholders are intentionally mode000. No descendant
+                    // can resolve through them, so they cannot hide a currently usable URI.
+                    emptyArray()
+                } else {
+                    throw FileNotFoundException("can't list $real")
+                }
                 children.mapNotNull { child ->
                     try {
                         validateSegment(child.name)
