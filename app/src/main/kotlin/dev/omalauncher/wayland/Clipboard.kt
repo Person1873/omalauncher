@@ -8,7 +8,7 @@ import android.util.Log
 import dev.omalauncher.readUpTo
 import android.webkit.MimeTypeMap
 import androidx.core.content.FileProvider
-import java.io.ByteArrayOutputStream
+import java.io.InputStream
 import java.io.File
 import java.io.IOException
 import kotlin.concurrent.thread
@@ -163,7 +163,7 @@ class Selection(
         thread(name = "wl-clip-image", isDaemon = true) {
             val bytes =
                 try {
-                    ParcelFileDescriptor.AutoCloseInputStream(read).use { readUpTo(it, MAX_IMAGE_BYTES + 1) }
+                    ParcelFileDescriptor.AutoCloseInputStream(read).use { it.readUpTo(MAX_IMAGE_BYTES + 1) }
                 } catch (e: IOException) {
                     Log.w(TAG, "reading the image failed", e)
                     return@thread

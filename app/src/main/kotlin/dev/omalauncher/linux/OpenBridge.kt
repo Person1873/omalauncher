@@ -23,7 +23,7 @@ class OpenBridge(
     private val onOpenFiles: (String) -> Unit,
     /** A guest path to edit, and the host path of the FIFO that gets the reply once it's closed. */
     private val onEdit: (String, String) -> Unit,
-    /** A file dialog's request (FilePick.parse's fields), and the host path of the FIFO that gets the picked paths. */
+    /** A file dialog's request (FilePick.parse's fields), and the guest path of its reply FIFO, resolved again on reply. */
     private val onPick: (List<String>, String) -> Unit,
     /** Linux apps' notifications, from the guest's notification service. */
     private val notifications: LinuxNotifications,
@@ -72,7 +72,8 @@ class OpenBridge(
         if (url.startsWith(PICK_PREFIX)) {
             val fields = url.removePrefix(PICK_PREFIX).split('\t')
             val reply = fields.first().takeIf { it.startsWith(Proot.GUEST_RUNTIME_DIR + "/") && !it.contains("..") } ?: return
-            return onPick(fields.drop(1), proot.hostFile(reply).path)
+            if (guestReplyFile(proot.guestFs, reply) == null) return
+            return onPick(fields.drop(1), reply)
         }
         if (!url.startsWith("http://") && !url.startsWith("https://")) {
             Log.i(TAG, "ignoring non-URL $url")

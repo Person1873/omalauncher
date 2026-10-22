@@ -34,6 +34,7 @@ import androidx.compose.ui.unit.dp
 import dev.omalauncher.linux.GuestMime
 import dev.omalauncher.linux.LinuxApp
 import dev.omalauncher.linux.commandFor
+import dev.omalauncher.linux.importGuestFile
 import dev.omalauncher.ui.Mono
 import dev.omalauncher.ui.Palette
 import dev.omalauncher.ui.PanelFrame
@@ -42,7 +43,6 @@ import dev.omalauncher.ui.ReadingWidth
 import dev.omalauncher.ui.applySystemBars
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
-import java.io.File
 
 /**
  * "Open in Linux": Android's share sheet and "Open with" hand files to
@@ -119,23 +119,9 @@ class OpenInLinuxActivity : InstantActivity() {
             }.getOrNull()?.replace('/', '_')?.takeIf { it.isNotBlank() && it != "." && it != ".." }
                 ?: uri.lastPathSegment?.substringAfterLast('/')?.takeIf { it.isNotBlank() }
                 ?: "shared"
-        val dir = runtime.proot.hostFile("/root/Downloads").apply { mkdirs() }
-        val target = freeName(dir, name)
         return runCatching {
-            contentResolver.openInputStream(uri)!!.use { input -> target.outputStream().use { input.copyTo(it) } }
-            "/root/Downloads/${target.name}"
-        }.onFailure { target.delete() }.getOrNull()
-    }
-
-    private fun freeName(
-        dir: File,
-        name: String,
-    ): File {
-        var file = File(dir, name)
-        val dot = name.lastIndexOf('.').takeIf { it > 0 } ?: name.length
-        var i = 1
-        while (file.exists()) file = File(dir, name.substring(0, dot) + " (${i++})" + name.substring(dot))
-        return file
+            contentResolver.openInputStream(uri)!!.use { input -> importGuestFile(runtime.proot.guestFs, name, input) }
+        }.getOrNull()
     }
 
     private companion object {
@@ -173,7 +159,7 @@ private fun OpenInLinux(
     var mime by remember { mutableStateOf<GuestMime?>(null) }
     LaunchedEffect(Unit) { mime = withContext(Dispatchers.IO) { GuestMime.load(runtime.proot.rootfs) } }
     val types = copied.orEmpty().mapNotNull { path -> mime?.forName(path.substringAfterLast('/')) }
-    val apps = runtime.linuxApps.filter { !it.terminal }
+    val apps = runtime.linuxApps.apps.filter { !it.terminal }
     val fits = apps.filter { app -> types.isNotEmpty() && types.all { mime?.opens(app.mimeTypes, it) == true } }
     val others = apps - fits.toSet()
 

@@ -11,6 +11,7 @@ import dev.omalauncher.ui.FilePick
 import dev.omalauncher.ui.FilesScreen
 import dev.omalauncher.ui.Palette
 import dev.omalauncher.ui.applySystemBars
+import dev.omalauncher.linux.guestReplyFile
 
 /**
  * A Linux app's file dialog, as the Files app in pick mode: asked for by the
@@ -50,13 +51,16 @@ class FilePickActivity : InstantActivity() {
 
     /** Non-blocking, and only once: an app that gave up on the dialog left no reader, and the open just fails. */
     private fun answer(paths: List<String>) {
-        val fifo = reply ?: return
+        val guestPath = reply ?: return
         reply = null
-        runtime.picked(fifo)
+        runtime.picked(guestPath)
+        val fifo = guestReplyFile(runtime.proot.guestFs, guestPath) ?: return
         val text = (paths.joinToString("\n") + "\n").toByteArray()
         try {
-            val fd = Os.open(fifo, OsConstants.O_WRONLY or OsConstants.O_NONBLOCK, 0)
+            val fd = Os.open(fifo.path, OsConstants.O_WRONLY or OsConstants.O_NONBLOCK or OsConstants.O_NOFOLLOW, 0)
             try {
+                // A guest-controlled regular file is not a reply channel, even if its path is inside the guest.
+                if (!OsConstants.S_ISFIFO(Os.fstat(fd).st_mode)) return
                 Os.write(fd, text, 0, text.size)
             } finally {
                 Os.close(fd)
@@ -70,7 +74,7 @@ class FilePickActivity : InstantActivity() {
         private const val EXTRA_REPLY = "reply"
         private const val EXTRA_REQUEST = "request"
 
-        /** [request] is [FilePick.parse]'s fields; [reply] the reply FIFO's host path. */
+        /** [request] is [FilePick.parse]'s fields; [reply] the reply FIFO's guest path. */
         fun intent(
             context: Context,
             request: List<String>,

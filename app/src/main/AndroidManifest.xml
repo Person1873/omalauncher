@@ -240,7 +240,7 @@
             android:icon="@drawable/files"
             android:label="Open in Linux"
             android:resizeableActivity="true"
-            android:taskAffinity="dev.omalauncher.openin"
+            android:taskAffinity="${applicationId}.openin"
             android:theme="@style/Theme.Omalauncher.Window">
             <intent-filter>
                 <action android:name="android.intent.action.VIEW" />
@@ -265,7 +265,7 @@
             android:icon="@drawable/files"
             android:label="Files"
             android:resizeableActivity="true"
-            android:taskAffinity="dev.omalauncher.pick"
+            android:taskAffinity="${applicationId}.pick"
             android:theme="@style/Theme.Omalauncher.Window"
             android:windowSoftInputMode="adjustResize" />
 
