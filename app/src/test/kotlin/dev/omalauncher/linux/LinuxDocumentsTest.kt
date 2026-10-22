@@ -236,6 +236,41 @@ class LinuxDocumentsTest {
         assertFalse(target.exists())
     }
 
+    @Test fun grantCleanupUsesProvidedMetadataWithoutFollowingOrdinaryFiles() {
+        val home = tmp.newFolder("home")
+        repeat(500) { File(home, "bulk-$it").createNewFile() }
+        File(home, "target").writeText("private")
+        val aliasTarget = File(home, "alias-target").apply { writeText("other") }
+        Files.createSymbolicLink(File(home, "alias").toPath(), aliasTarget.toPath())
+        val calls = mutableListOf<Pair<String, Boolean>>()
+        val docs = LinuxDocuments(home, fileTypeForScan = { file, follow ->
+            calls += file.name to follow
+            LinuxDocuments.readFileType(file, follow)
+        })
+        docs.rename("home/target", "renamed")
+        assertEquals(500, calls.count { it.first.startsWith("bulk-") && !it.second })
+        assertEquals(0, calls.count { it.first.startsWith("bulk-") && it.second })
+        assertTrue(calls.contains("alias-target" to true))
+        assertEquals("private", File(home, "renamed").readText())
+    }
+
+    @Test fun grantCleanupKeepsCanonicalSiblingPrefixSeparate() {
+        val docs = docs()
+        val dir = File(docs.home, "part").apply { mkdir() }
+        File(dir, "note").writeText("renamed")
+        val sibling = File(docs.home, "part-extra").apply { mkdir() }
+        File(sibling, "note").writeText("kept")
+        Files.createSymbolicLink(File(docs.home, "alias").toPath(), sibling.toPath())
+        val invalidated = mutableSetOf<String>()
+        docs.rename("home/part", "renamed", invalidated::add)
+        assertEquals(setOf("home/part/note"), invalidated)
+        assertEquals("kept", docs.fileOf("home/alias/note").readText())
+        invalidated.clear()
+        docs.delete("home/renamed", invalidated::add)
+        assertTrue(invalidated.none { it.startsWith("home/part-extra") || it.startsWith("home/alias") })
+        assertEquals("kept", docs.fileOf("home/alias/note").readText())
+    }
+
     @Test fun grantCleanupScansPhysicalDirectoryAliasesOnlyOnce() {
         val home = tmp.newFolder("home")
         val a = File(home, "a").apply { mkdir() }

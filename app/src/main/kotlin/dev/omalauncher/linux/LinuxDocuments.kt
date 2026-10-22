@@ -13,8 +13,11 @@ import java.nio.file.attribute.BasicFileAttributes
 /** Filesystem operations for the home DocumentsProvider, testable without Android. */
 internal class LinuxDocuments(
     val home: File,
+    private val fileTypeForScan: (File, Boolean) -> FileType = { file, follow -> readFileType(file, follow) },
     private val canonicalForScan: (File) -> File = { it.canonicalFile },
 ) {
+    internal enum class FileType { REGULAR, DIRECTORY, SYMLINK, OTHER }
+
     fun fileOf(documentId: String): File {
         val file = File(home, relativePath(documentId))
         val real = file.canonicalFile
@@ -98,25 +101,28 @@ internal class LinuxDocuments(
     }
 
     private fun affectedIds(documentId: String, file: File): Set<String> {
-        val affected = mutableSetOf(canonicalForScan(file).toPath())
+        val affected = mutableSetOf(canonicalForScan(file))
         // A link removed inside a subtree can invalidate aliases elsewhere in home.
         Files.walkFileTree(file.toPath(), object : SimpleFileVisitor<Path>() {
             override fun visitFile(file: Path, attrs: BasicFileAttributes): FileVisitResult {
                 if (attrs.isSymbolicLink) {
-                    try { affected.add(canonicalForScan(file.toFile()).toPath()) } catch (_: IOException) { }
+                    try { affected.add(canonicalForScan(file.toFile())) } catch (_: IOException) { }
                 }
                 return FileVisitResult.CONTINUE
             }
         })
-        data class Entry(val name: String, val real: Path, val directory: Boolean)
-        fun matches(real: Path) = affected.any { real.startsWith(it) }
-        val graph = mutableMapOf<Path, List<Entry>>()
+        data class Entry(val name: String, val real: File, val directory: Boolean)
+        // These are already canonical parent paths. Preserve the separator boundary,
+        // without repeatedly encoding every unrelated entry as a UnixPath on Android.
+        fun descendsFrom(real: File, parent: File) = real.path.startsWith(parent.path + File.separator)
+        fun matches(real: File) = affected.any { real == it || descendsFrom(real, it) }
+        val graph = mutableMapOf<File, List<Entry>>()
         // Discover each physical directory once, not once per lexical alias. Regular
         // entries inherit their canonical parent's path; only symlinks need resolution.
         // Keep only edges that lead to affected documents, then expand their lexical ids.
-        fun discover(real: Path): List<Entry> = graph.getOrPut(real) {
+        fun discover(real: File): List<Entry> = graph.getOrPut(real) {
             try {
-                val directory = real.toFile()
+                val directory = real
                 val children = directory.listFiles() ?: if (!directory.canExecute()) {
                     // Proot bind placeholders are intentionally mode000. No descendant
                     // can resolve through them, so they cannot hide a currently usable URI.
@@ -127,13 +133,13 @@ internal class LinuxDocuments(
                 children.mapNotNull { child ->
                     try {
                         validateSegment(child.name)
-                        val attrs = Files.readAttributes(child.toPath(), BasicFileAttributes::class.java, NOFOLLOW_LINKS)
-                        val resolved = if (attrs.isSymbolicLink) canonicalForScan(child).toPath() else real.resolve(child.name)
+                        val type = fileTypeForScan(child, false)
+                        val resolved = if (type == FileType.SYMLINK) canonicalForScan(child) else child
                         // Preserve isChild's strict canonical descent, including for directory links.
-                        if (resolved == real || !resolved.startsWith(real)) return@mapNotNull null
-                        val target = if (attrs.isSymbolicLink) Files.readAttributes(resolved, BasicFileAttributes::class.java) else attrs
-                        if (!target.isDirectory && !target.isRegularFile) return@mapNotNull null
-                        Entry(child.name, resolved, target.isDirectory)
+                        if (!descendsFrom(resolved, real)) return@mapNotNull null
+                        val target = if (type == FileType.SYMLINK) fileTypeForScan(resolved, true) else type
+                        if (target != FileType.DIRECTORY && target != FileType.REGULAR) return@mapNotNull null
+                        Entry(child.name, resolved, target == FileType.DIRECTORY)
                     } catch (_: IOException) {
                         null
                     }
@@ -144,9 +150,9 @@ internal class LinuxDocuments(
                 throw IOException("can't safely enumerate document aliases in $real", e)
             }
         }
-        val base = canonicalForScan(home).toPath()
+        val base = canonicalForScan(home)
         val ids = mutableSetOf<String>()
-        val pending = ArrayDeque<Pair<String, Path>>().apply { add(HOME_ID to base) }
+        val pending = ArrayDeque<Pair<String, File>>().apply { add(HOME_ID to base) }
         while (pending.isNotEmpty()) {
             val (id, real) = pending.removeLast()
             if (!documentId.startsWith("$id/") && matches(real)) ids.add(id)
@@ -173,6 +179,17 @@ internal class LinuxDocuments(
     }
 
     companion object {
+        internal fun readFileType(file: File, follow: Boolean): FileType {
+            val options = if (follow) emptyArray() else arrayOf(NOFOLLOW_LINKS)
+            val attrs = Files.readAttributes(file.toPath(), BasicFileAttributes::class.java, *options)
+            return when {
+                attrs.isSymbolicLink -> FileType.SYMLINK
+                attrs.isDirectory -> FileType.DIRECTORY
+                attrs.isRegularFile -> FileType.REGULAR
+                else -> FileType.OTHER
+            }
+        }
+
         const val HOME_ID = "home"
         const val DIRECTORY_MIME_TYPE = "vnd.android.document/directory"
 
