@@ -33,9 +33,13 @@ own path rather than operating on its resolved target. Recursive deletion uses
 URI permissions. Names are sanitized, and collisions, including dangling links,
 receive numbered names instead of overwriting an existing entry.
 
-Rename and deletion discover each physical home directory once per operation,
-resolve symlinks rather than repeatedly canonicalizing unrelated regular files,
+For alias discovery, rename and deletion list each physical home directory once
+per operation, resolve symlinks rather than repeatedly canonicalizing unrelated regular files,
 and expand only affected descendant and alias IDs before changing the filesystem.
+The graph uses already-canonical `File` paths with separator-aware descent checks.
+Android supplies file types using public `Os.lstat`/`Os.stat`, avoiding per-entry
+NIO path encoding; JVM tests retain the NIO metadata fallback and exercise the
+injected-reader contract.
 The graph is not retained between operations, so guest-created aliases do not
 rely on a watcher or a stale cache. Discovery still scales with home size; if a
 searchable directory cannot be listed, mutation fails rather than silently
@@ -53,6 +57,25 @@ installation and removal notify the roots URI so the picker can refresh its
 sidebar. Guest writes made outside the provider do not have a directory watcher;
 reopen the listing to refresh them. Canonical-path checks do not provide race-free
 isolation from a guest concurrently replacing filesystem entries.
+
+## Runtime verification
+
+Measure mutation latency in an optimized, non-debuggable build on the target device.
+On the 2026-10-22 Pixel run, JIT was disabled and ART forced the debuggable APK to
+`verify` even when `cmd package compile -m speed` was requested. Debug-provider
+rename/delete operations took tens of seconds; a non-debuggable, AOT-compiled
+fork port of the same provider took 1,379/622 ms through the shell probe and
+1,034/944 ms through an ordinary Android client. These are observations, not
+constant-time guarantees: discovery still scales with the home directory.
+Changing the build type does not justify changing the device's global JIT policy.
+
+The separate client held real Android URI permissions, not the shell's
+`MANAGE_DOCUMENTS` access. Tests covered temporary service-grant expiry, persisted
+grants surviving a client force-stop, descendant and symlink-alias revocation on
+rename/delete, continued parent/unrelated access, and no access resurrection when
+old paths were recreated. The live tests used an in-place, same-signer fork port;
+they are not a claim that an upstream-main APK was installed. System-picker UI
+verification is recorded separately from these Intent-granted client tests.
 
 ## Consolidation
 

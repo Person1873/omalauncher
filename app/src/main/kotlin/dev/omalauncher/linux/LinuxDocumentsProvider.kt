@@ -11,6 +11,9 @@ import android.provider.DocumentsContract
 import android.provider.DocumentsContract.Document
 import android.provider.DocumentsContract.Root
 import android.provider.DocumentsProvider
+import android.system.ErrnoException
+import android.system.Os
+import android.system.OsConstants
 import android.webkit.MimeTypeMap
 import dev.omalauncher.R
 import java.io.File
@@ -19,7 +22,24 @@ import java.io.IOException
 
 /** Linux's home in Android's document picker; apps receive only the files or trees the user selects. */
 class LinuxDocumentsProvider : DocumentsProvider() {
-    private val docs by lazy { LinuxDocuments(File(context!!.filesDir, "arch/root")) }
+    private val docs by lazy {
+        LinuxDocuments(File(context!!.filesDir, "arch/root"), fileTypeForScan = ::scanFileType)
+    }
+
+    /** Public API21 stat calls avoid NIO's per-entry path encoding on the app runtime. */
+    private fun scanFileType(file: File, follow: Boolean): LinuxDocuments.FileType {
+        val mode = try {
+            (if (follow) Os.stat(file.path) else Os.lstat(file.path)).st_mode
+        } catch (e: ErrnoException) {
+            throw IOException("can't inspect document entry", e)
+        }
+        return when {
+            OsConstants.S_ISLNK(mode) -> LinuxDocuments.FileType.SYMLINK
+            OsConstants.S_ISDIR(mode) -> LinuxDocuments.FileType.DIRECTORY
+            OsConstants.S_ISREG(mode) -> LinuxDocuments.FileType.REGULAR
+            else -> LinuxDocuments.FileType.OTHER
+        }
+    }
     private val authority get() = context!!.packageName + AUTHORITY_SUFFIX
 
     override fun onCreate() = true
