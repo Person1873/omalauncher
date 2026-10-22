@@ -229,6 +229,8 @@ class Bootstrap(
             } catch (e: Exception) {
                 Log.e(TAG, "setup failed", e)
                 _state.value = LinuxState.Failed(stage, e.message ?: e.toString(), log.toList())
+            } finally {
+                LinuxDocumentsProvider.rootsChanged(context)
             }
         }
 
@@ -261,6 +263,7 @@ class Bootstrap(
                 log.clear()
             }
             _state.value = LinuxState.NotInstalled
+            LinuxDocumentsProvider.rootsChanged(context)
         }
 
     /**

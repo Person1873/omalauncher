@@ -9,16 +9,20 @@ plugins {
 val uploadKey = rootProject.file("keystore.properties").takeIf { it.exists() }
     ?.let { f -> Properties().apply { f.inputStream().use(::load) } }
 
+// Use the same NDK for wlbridge and the bundled proot binaries.
+val prootNdk = rootProject.file("scripts/fetch-proot.sh").readLines().first { it.startsWith("NDK_VERSION=") }.substringAfter('=')
+
 android {
     namespace = "dev.omalauncher"
     compileSdk = 37
+    ndkVersion = prootNdk
 
     defaultConfig {
-        applicationId = "dev.omalauncher"
+        applicationId = "dev.omalauncher.fork"
         minSdk = 29
         targetSdk = 37
-        versionCode = 14
-        versionName = "0.7.2"
+        versionCode = 15
+        versionName = "0.7.2-documents.1"
         ndk { abiFilters += "arm64-v8a" }
     }
 
