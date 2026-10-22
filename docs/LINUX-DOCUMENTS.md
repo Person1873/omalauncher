@@ -33,9 +33,14 @@ own path rather than operating on its resolved target. Recursive deletion uses
 URI permissions. Names are sanitized, and collisions, including dangling links,
 receive numbered names instead of overwriting an existing entry.
 
-Rename and deletion enumerate visible home IDs before changing the filesystem
-so old descendant and symlink-alias grants can be revoked. This also
-conservatively revokes grants to unchanged aliases of affected linked content;
+Rename and deletion discover each physical home directory once per operation,
+resolve symlinks rather than repeatedly canonicalizing unrelated regular files,
+and expand only affected descendant and alias IDs before changing the filesystem.
+The graph is not retained between operations, so guest-created aliases do not
+rely on a watcher or a stale cache. Discovery still scales with home size; if a
+visible directory cannot be listed, mutation fails rather than silently retaining
+a potentially affected grant. This also conservatively revokes grants to
+unchanged aliases of affected linked content;
 those files may need selecting again. Grants to the lexical containing folders
 are retained. A no-op or failed rename revokes nothing; Android handles the
 renamed document's own grant after the provider returns.
