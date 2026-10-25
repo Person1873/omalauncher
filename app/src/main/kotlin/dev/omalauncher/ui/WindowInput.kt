@@ -66,6 +66,7 @@ private suspend fun PointerInputScope.handlePointer(
         // Clients with wl_touch (foot, GTK) get real touch: foot turns hold-and-drag into selection.
         if (wm.wantsTouch(hit.surface)) {
             val id = change.id.value.toInt()
+            wm.dragTo(window, start.x, start.y)
             wm.touchDown(hit, id)
             var moved = false
             var tapped = false
@@ -80,10 +81,12 @@ private suspend fun PointerInputScope.handlePointer(
                 }
                 c.consume()
                 if ((c.position - start).getDistance() > touchSlop) moved = true
+                wm.dragTo(window, c.position.x, c.position.y)
                 val d = (c.position - start) / hit.scale
-                wm.touchMotion(id, hit.x + d.x, hit.y + d.y)
+                wm.touchMotion(id, hit.x + d.x, hit.y + d.y, window.hitTest(c.position.x, c.position.y))
             }
             wm.touchUp(id)
+            wm.endDrag()
             if (tapped && wm.onTextCursorRow(hit)) onCursorTap()
             continue
         }

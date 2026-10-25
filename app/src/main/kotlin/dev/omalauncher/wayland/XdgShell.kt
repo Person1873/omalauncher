@@ -220,6 +220,14 @@ class XdgToplevel(
     @Volatile
     var position: Pair<Float, Float>? = null
 
+    /** Attached to a drag (xdg_toplevel_drag): its geometry's corner this far off the pointer, while the drag runs. */
+    @Volatile
+    var dragOffset: Pair<Int, Int>? = null
+
+    /** The drag's source it's attached to: shown over the window that drag started in. */
+    @Volatile
+    var dragSource: DataSource? = null
+
     @Volatile
     private var ownRenderer: WindowRenderer? = null
 
