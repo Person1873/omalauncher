@@ -29,6 +29,11 @@ import dev.omalauncher.linux.OpenBridge
 import dev.omalauncher.linux.Pacman
 import dev.omalauncher.linux.Proot
 import dev.omalauncher.linux.SessionBus
+import dev.omalauncher.linux.GuestPortal
+import dev.omalauncher.linux.GuestPrinting
+import dev.omalauncher.linux.PortalAppearance
+import dev.omalauncher.linux.AndroidPortals
+import dev.omalauncher.linux.LinuxNotifications
 import dev.omalauncher.linux.SystemUpdates
 import dev.omalauncher.linux.LauncherFont
 import dev.omalauncher.linux.TerminalFont
@@ -94,7 +99,9 @@ class Runtime(
     val themes = ThemeStore(context, proot, style, isLinux = { linux }, onConfigChanged = ::syncGuest)
     private val audio = AudioBridge(proot)
     private val sessionBus = SessionBus(proot)
-    private val openBridge = OpenBridge(context, proot, onOpenFiles = ::openFiles, onEdit = ::edit)
+    private val printing = GuestPrinting(context, proot)
+    internal val portals = AndroidPortals(context, proot).apply { onOpenFiles = ::openFiles }
+    private val openBridge = OpenBridge(context, proot, onOpenFiles = ::openFiles, onEdit = ::edit, onPick = ::pick, notifications = LinuxNotifications(context))
     val agents = AgentStore(proot, onChanged = ::syncGuest)
     val pacman = Pacman(context, proot)
     val widgets = WidgetEngine(context, proot, this)
@@ -112,6 +119,8 @@ class Runtime(
             listOf(
                 { defaultApps(proot.applications) },
                 { bundledIcons(context, proot.home) },
+                GuestPortal(context, proot)::managed,
+                printing::managed,
                 openBridge::managed,
                 pacman::managed,
                 agents::managed,
@@ -137,7 +146,7 @@ class Runtime(
         private set
 
     /** Linux is installed and its services run: guest commands (like the update check) can go. */
-    private var linux = false
+    private var linux by mutableStateOf(false)
 
     /** The Linux install and removal; one at a time. */
     private var linuxJob: Job? = null
@@ -146,6 +155,14 @@ class Runtime(
         // Saved, so removing Linux later doesn't bring the first-run screen back.
         if (launcherReady) prefs.edit().putBoolean(SETUP_DONE, true).apply()
         themes.loadPalette()
+        scope.launch {
+            snapshotFlow { Triple(linux, Palette.isLight, Palette.accent.toArgb()) }.collect { (ready, light, accent) ->
+                if (ready) withContext(Dispatchers.IO) {
+                    runCatching { PortalAppearance.write(proot.runtimeDir, light, accent) }
+                        .onFailure { Log.w(TAG, "cannot update portal appearance", it) }
+                }
+            }
+        }
         // An agent or the user edited style.toml; the rest of the style is read where it's drawn.
         style.onExternalChange = { old, new ->
             val changed = new.changed(old)
@@ -237,6 +254,8 @@ class Runtime(
             scope.launch {
                 install?.cancel()
                 sessionBus.stop()
+                printing.stop()
+                portals.stop()
                 withContext(Dispatchers.IO) { proot.killAll() }
                 install?.join()
                 bootstrap.remove()
@@ -274,6 +293,8 @@ class Runtime(
                 widgets.linuxChanged(false)
                 audio.stop()
                 sessionBus.stop()
+                printing.stop()
+                portals.stop()
                 withContext(Dispatchers.IO) { proot.killAll() }
                 bootstrap.remove()
                 withContext(Dispatchers.IO) {
@@ -288,6 +309,10 @@ class Runtime(
 
     /** The foreground service keeps the process, and with it Linux, alive; only while Linux is installed or installing. */
     private fun setService(on: Boolean) {
+        if (!on) {
+            printing.stop()
+            portals.stop()
+        }
         // Android 12+ refuses a foreground service started from the background; the work then goes on without it.
         runCatching { LinuxService.set(context, on) }.onFailure { Log.w(TAG, "cannot start the service", it) }
     }
@@ -332,6 +357,9 @@ class Runtime(
         themes.renderGuest()
         withContext(Dispatchers.IO) {
             provisioner.sync()
+            PortalAppearance.write(proot.runtimeDir, Palette.isLight, Palette.accent.toArgb())
+            portals.start()
+            printing.start()
             sessionBus.start()
             audio.start()
             synchronized(server) { server.input.setKeymap(proot.keymap.path) }
@@ -609,6 +637,14 @@ class Runtime(
     /** Opens the owl app in file [name] in its own task; nothing if it isn't running (removed, or broken). */
     fun openOwlApp(name: String) {
         if (widgets.isApp(name)) InstantActivity.startInstantly(context, OwlAppActivity.intent(context, name))
+    }
+
+    /** Shows a Linux app's file dialog: the Files app picking, answering on [reply] (see [FilePickActivity]). */
+    fun pick(
+        request: List<String>,
+        reply: String,
+    ) {
+        InstantActivity.startInstantly(context, FilePickActivity.intent(context, request, reply))
     }
 
     /** Opens the Files app, at [path] (a guest path) if given. */

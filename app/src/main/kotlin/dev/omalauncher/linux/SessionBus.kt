@@ -67,6 +67,7 @@ class SessionBus(private val proot: Proot) {
           <listen>$ADDRESS</listen>
           <auth>ANONYMOUS</auth>
           <allow_anonymous/>
+          <servicedir>${GuestPortal.SERVICES}</servicedir>
           <standard_session_servicedirs/>
           <policy context="default">
             <allow send_destination="*" eavesdrop="true"/>

@@ -204,6 +204,9 @@ class Bootstrap(
                 guest("pacman -Rdd --noconfirm linux-aarch64 \$(pacman -Qq | grep ^linux-firmware); true")
             },
             Step("packages-1", Stage.Packages, "Installing packages", network = true) { guest(pacmanInstall(PACKAGES, refresh = true)) },
+            Step("android-printing-1", Stage.Packages, "Installing Android printing bridge", network = true, optional = true) {
+                guest(pacmanInstall(listOf("gtk3", "cups", "cups-pdf", "cups-filters"), refresh = true))
+            },
             // Existing installations ran packages-1 before the session bus was added.
             Step("dbus-1", Stage.Packages, "Installing D-Bus", network = true,
                 isDone = { File(proot.rootfs, "usr/bin/dbus-daemon").isFile }) { guest(pacmanInstall(listOf("dbus"))) },

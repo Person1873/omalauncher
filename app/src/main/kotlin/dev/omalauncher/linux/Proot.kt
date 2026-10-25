@@ -178,7 +178,7 @@ class Proot(
                 "QT_QPA_PLATFORM=wayland",
                 "MOZ_ENABLE_WAYLAND=1",
                 "SDL_VIDEODRIVER=wayland",
-            ) + graphicsEnv + listOf("/bin/sh", "-c", script)
+            ) + GuestPortal.ENV + graphicsEnv + listOf("/bin/sh", "-c", script)
 
     /**
      * Kills every proot we started and every guest process: before the rootfs
