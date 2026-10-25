@@ -190,8 +190,68 @@ static void email_invalid_fds(GDBusConnection *c, const gchar *kind, const gchar
     g_object_unref(fds); g_assert_no_error(error); g_assert_nonnull(result); g_variant_unref(result); wait_response(0);
 }
 
+static guint monitor_network_changes, monitor_power_changes;
+
+static void monitor_network_changed(GNetworkMonitor *monitor, gboolean available, gpointer data) {
+    monitor_network_changes++;
+}
+
+static void monitor_power_changed(GObject *monitor, GParamSpec *spec, gpointer data) {
+    monitor_power_changes++;
+}
+
+static gboolean monitors_match(GNetworkMonitor *network, GPowerProfileMonitor *power, gboolean enabled) {
+    return g_network_monitor_get_network_available(network) == enabled &&
+           g_network_monitor_get_network_metered(network) == !enabled &&
+           g_network_monitor_get_connectivity(network) == (enabled ? G_NETWORK_CONNECTIVITY_FULL : G_NETWORK_CONNECTIVITY_LOCAL) &&
+           g_power_profile_monitor_get_power_saver_enabled(power) == enabled;
+}
+
+static void await_monitors(GNetworkMonitor *network, GPowerProfileMonitor *power, gboolean enabled, gboolean require_changes) {
+    gint64 until = g_get_monotonic_time() + 3 * G_TIME_SPAN_SECOND;
+    while ((!monitors_match(network, power, enabled) || (require_changes && (!monitor_network_changes || !monitor_power_changes))) &&
+           g_get_monotonic_time() < until) {
+        while (g_main_context_iteration(NULL, FALSE)) {}
+        g_usleep(1000);
+    }
+    g_assert_true(monitors_match(network, power, enabled));
+    if (require_changes) {
+        g_assert_cmpuint(monitor_network_changes, >, 0);
+        g_assert_cmpuint(monitor_power_changes, >, 0);
+    }
+}
+
+/* Exercise GLib's real consumer implementations, not hand-written D-Bus calls.
+ * The GTK-only negative control exits42 rather than aborting/dumping a core. */
+static int monitor_frontends(const gchar *snapshot) {
+    GNetworkMonitor *network = g_network_monitor_get_default();
+    GPowerProfileMonitor *power = g_power_profile_monitor_dup_default();
+    g_print("network-backend=%s\npower-backend=%s\n", G_OBJECT_TYPE_NAME(network), G_OBJECT_TYPE_NAME(power));
+    if (g_strcmp0(G_OBJECT_TYPE_NAME(network), "GNetworkMonitorPortal") ||
+        g_strcmp0(G_OBJECT_TYPE_NAME(power), "GPowerProfileMonitorPortal")) {
+        g_object_unref(power);
+        return 42;
+    }
+    g_signal_connect(network, "network-changed", G_CALLBACK(monitor_network_changed), NULL);
+    g_signal_connect(power, "notify::power-saver-enabled", G_CALLBACK(monitor_power_changed), NULL);
+    /* Power's initial GetAll is synchronous; network initial getters are async. */
+    await_monitors(network, power, TRUE, FALSE);
+    monitor_network_changes = monitor_power_changes = 0;
+    GError *error = NULL;
+    g_assert_true(g_file_set_contents(snapshot, "power-saver=0\navailable=0\nmetered=1\nconnectivity=1\n", -1, &error));
+    g_assert_no_error(error);
+    await_monitors(network, power, FALSE, TRUE);
+    g_print("GLib monitor initial state and live transitions: OK\n");
+    g_object_unref(power);
+    return 0;
+}
+
 int main(int argc, char **argv) {
     g_assert_cmpint(argc, >=, 2);
+    if (g_str_equal(argv[1], "monitor-frontends")) {
+        g_assert_cmpint(argc, ==, 3);
+        return monitor_frontends(argv[2]);
+    }
     GDBusConnection *c = connection(); GError *error = NULL;
     loop = g_main_loop_new(NULL, FALSE);
     g_dbus_connection_signal_subscribe(c, BUS, "org.freedesktop.portal.Request", "Response", NULL, NULL, G_DBUS_SIGNAL_FLAGS_NONE, response_cb, NULL, NULL);

@@ -19,6 +19,8 @@ ROOT = Path(__file__).resolve().parents[1]
 BUS = 'org.freedesktop.portal.Desktop'
 PATH = '/org/freedesktop/portal/desktop'
 SETTINGS = 'org.freedesktop.portal.Settings'
+POWER = 'org.freedesktop.portal.PowerProfileMonitor'
+NETWORK = 'org.freedesktop.portal.NetworkMonitor'
 
 
 class PortalTests(unittest.TestCase):
@@ -29,13 +31,18 @@ class PortalTests(unittest.TestCase):
         cls.scratch = tempfile.TemporaryDirectory(prefix='omalauncher-portals-')
         cls.runtime = Path(cls.scratch.name)
         cls.appearance = cls.runtime / 'omalauncher-color-scheme'
+        cls.status = cls.runtime / 'omalauncher-system-status'
         flags = subprocess.check_output(['pkg-config', '--cflags', '--libs', 'gio-2.0', 'gio-unix-2.0'], text=True).split()
         flags += shlex.split(os.environ.get('PORTAL_TEST_CFLAGS', ''))
         cls.binary = cls.runtime / 'portal'
         subprocess.run(['cc', '-Wall', '-Wextra', '-Wno-unused-parameter', '-O0', '-g',
                         str(ROOT / 'guest/omalauncher-portal/omalauncher-portal.c'), str(ROOT / 'guest/omalauncher-portal/portal-settings.c'), str(ROOT / 'guest/omalauncher-portal/portal-actions.c'),
- str(ROOT / 'guest/omalauncher-portal/portal-transport.c'), '-o', str(cls.binary)] + flags, check=True)
+ str(ROOT / 'guest/omalauncher-portal/portal-status.c'), str(ROOT / 'guest/omalauncher-portal/portal-transport.c'), '-o', str(cls.binary)] + flags, check=True)
         cls.log = (cls.runtime / 'service.log').open('w+')
+        cls.watch_interposer = cls.runtime / 'watch-interposer.so'
+        subprocess.run(['cc', '-Wall', '-Wextra', '-shared', '-fPIC',
+                        str(ROOT / 'scripts/portal-test-watch-interposer.c'), '-o', str(cls.watch_interposer),
+                        '-ldl'] + flags, check=True)
         cls.client = cls.runtime / 'client'
         subprocess.run(['cc', '-Wall', '-Wextra', '-Wno-unused-parameter', '-O0', '-g', str(ROOT / 'scripts/portal-test-client.c'), '-o', str(cls.client)] + flags, check=True)
         cls.serializer = cls.runtime / 'gtk-serializer'
@@ -83,7 +90,70 @@ class PortalTests(unittest.TestCase):
 
     def setUp(self):
         self.appearance.unlink(missing_ok=True)
+        self.status.unlink(missing_ok=True)
         self.legacy.configure()
+
+    def write_appearance(self, lines):
+        tmp = self.appearance.with_suffix('.tmp')
+        tmp.write_text('\n'.join(lines) + '\n')
+        tmp.replace(self.appearance)
+
+    def write_status(self, text):
+        tmp = self.status.with_suffix('.tmp')
+        tmp.write_text(text)
+        tmp.replace(self.status)
+
+    def capture_bus_text(self, actions, matches=None, timeout=3.0):
+        """Runs `actions` after a `gdbus monitor` on the portal object is
+        confirmed ready, and returns whatever signal text it captured.
+        `matches(text)` breaks the capture early once satisfied; otherwise
+        capture runs for the full `timeout`, which is what a dedup/no-signal
+        assertion needs."""
+        import select
+        monitor = subprocess.Popen(['gdbus', 'monitor', '--session', '--dest', BUS, '--object-path', PATH],
+                                    stdout=subprocess.PIPE, stderr=subprocess.STDOUT, bufsize=0)
+        assert monitor.stdout is not None
+        monitor_fd = monitor.stdout.fileno()
+        pending = b''
+        seen = b''
+
+        def read_chunk(deadline):
+            if select.select([monitor_fd], [], [], max(0, deadline - time.monotonic()))[0]:
+                chunk = os.read(monitor_fd, 65536)
+                self.assertTrue(chunk, 'signal monitor exited: ' + (pending + seen).decode(errors='replace'))
+                return chunk
+            self.assertIsNone(monitor.poll(), 'signal monitor exited')
+            return b''
+
+        try:
+            ready = False
+            until = time.monotonic() + 3
+            while time.monotonic() < until and not ready:
+                pending += read_chunk(until)
+                while b'\n' in pending:
+                    line, pending = pending.split(b'\n', 1)
+                    if b'is owned by' in line:
+                        ready = True
+                        break
+            self.assertTrue(ready, 'signal monitor not ready: ' + pending.decode(errors='replace'))
+            seen = pending
+            pending = b''
+            actions()
+            until = time.monotonic() + timeout
+            while time.monotonic() < until:
+                seen += read_chunk(until)
+                # Only complete lines may satisfy a payload assertion. os.read
+                # drains bytes directly, never hiding lines in TextIO read-ahead.
+                complete = seen[:seen.rfind(b'\n') + 1].decode(errors='replace')
+                if matches and matches(complete):
+                    break
+        finally:
+            if monitor.poll() is None:
+                monitor.terminate()
+            remaining, _ = monitor.communicate(timeout=5)
+            if remaining:
+                seen += remaining.encode() if isinstance(remaining, str) else remaining
+        return seen.decode(errors='replace')
 
     def native(self, case, *args):
         result = subprocess.run([str(self.client), case, *map(str, args)], text=True, capture_output=True, timeout=8)
@@ -318,40 +388,224 @@ class PortalTests(unittest.TestCase):
 
     def test_atomic_replace_notifies(self):
         self.appearance.write_text('dark\n')
-        monitor = subprocess.Popen(['gdbus', 'monitor', '--session', '--dest', BUS, '--object-path', PATH], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
-        assert monitor.stdout is not None
-        try:
-            import select
-            # Readiness is gdbus' name-owner announcement, not a blind delay.
-            ready = False
-            until = time.monotonic() + 3
-            while time.monotonic() < until:
-                if select.select([monitor.stdout], [], [], .1)[0]:
-                    if 'is owned by' in monitor.stdout.readline():
-                        ready = True
-                        break
-            self.assertTrue(ready, 'signal monitor not ready')
-            tmp = self.appearance.with_suffix('.tmp')
-            tmp.write_text('light\n')
-            tmp.replace(self.appearance)
-            until = time.monotonic() + 3
-            seen = ''
-            while time.monotonic() < until:
-                if select.select([monitor.stdout], [], [], .1)[0]:
-                    seen += monitor.stdout.readline()
-                    if 'SettingChanged' in seen and 'uint32 2' in seen:
-                        break
-            self.assertIn('SettingChanged', seen)
-            self.assertIn('uint32 2', seen)
-        finally:
-            monitor.terminate()
-            monitor.communicate(timeout=5)
+        seen = self.capture_bus_text(lambda: self.write_appearance(['light']),
+                                     matches=lambda s: "'color-scheme', <uint32 2>" in s)
+        self.assertIn('SettingChanged', seen)
+        self.assertIn("'color-scheme', <uint32 2>", seen)
+
+    # ---- PowerProfileMonitor v1 / NetworkMonitor v2, over the shared
+    # omalauncher-system-status snapshot. ----
+
+    def test_power_profile_monitor_version_is_one(self):
+        self.assertIn('uint32 1', self.call('org.freedesktop.DBus.Properties.Get', POWER, 'version'))
+
+    def test_network_monitor_version_is_two_not_three(self):
+        self.assertIn('uint32 2', self.call('org.freedesktop.DBus.Properties.Get', NETWORK, 'version'))
+
+    def test_network_monitor_does_not_advertise_v3_methods(self):
+        # GetStatus/CanReach are version-3 additions; a real v3 implementation
+        # is a separate deliberate reachability deliverable, not this one.
+        for method, args in [('GetStatus', []), ('CanReach', ['example.org', '443'])]:
+            with self.subTest(method=method):
+                result = self.dbus(f'{NETWORK}.{method}', *args)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn('UnknownMethod', result.stderr)
+
+    def test_power_saver_unknown_without_snapshot(self):
+        result = self.dbus('org.freedesktop.DBus.Properties.Get', POWER, 'power-saver-enabled')
+        self.assertNotEqual(result.returncode, 0)
+
+    def test_power_saver_known_values(self):
+        for value, expected in [('0', 'false'), ('1', 'true')]:
+            with self.subTest(value=value):
+                self.write_status(f'power-saver={value}\n')
+                self.assertIn(expected, self.call('org.freedesktop.DBus.Properties.Get', POWER, 'power-saver-enabled'))
+
+    def test_power_saver_malformed_value_is_unknown(self):
+        self.write_status('power-saver=2\n')
+        result = self.dbus('org.freedesktop.DBus.Properties.Get', POWER, 'power-saver-enabled')
+        self.assertNotEqual(result.returncode, 0)
+
+    def test_glib_monitor_frontends_select_portals_and_receive_live_changes(self):
+        # Establish the published baseline via an observed transition, not a
+        # getter that could run before the file-monitor event.
+        baseline = 'power-saver=1\navailable=1\nmetered=0\nconnectivity=4\n'
+        seen = self.capture_bus_text(lambda: self.write_status(baseline), matches=lambda s: "'power-saver-enabled': <true>" in s and f'{NETWORK}.changed' in s)
+        self.assertIn("'power-saver-enabled': <true>", seen)
+        self.assertIn(f'{NETWORK}.changed', seen)
+        env = {**os.environ, 'GTK_USE_PORTAL': '1', 'GIO_USE_PORTALS': '0'}
+        old = subprocess.run([str(self.client), 'monitor-frontends', str(self.status)], env=env,
+                             text=True, capture_output=True, timeout=8)
+        self.assertEqual(old.returncode, 42, old.stdout + old.stderr)
+        self.assertNotIn('network-backend=GNetworkMonitorPortal', old.stdout)
+        current = subprocess.run([str(self.client), 'monitor-frontends', str(self.status)],
+                                 env={**env, 'GIO_USE_PORTALS': '1'}, text=True, capture_output=True, timeout=8)
+        self.assertEqual(current.returncode, 0, current.stdout + current.stderr)
+        self.assertIn('GLib monitor initial state and live transitions: OK', current.stdout)
+        self.assertIsNone(self.service.poll())
+
+    def test_network_unknown_without_snapshot(self):
+        for method in ('GetAvailable', 'GetMetered', 'GetConnectivity'):
+            with self.subTest(method=method):
+                result = self.dbus(f'{NETWORK}.{method}')
+                self.assertNotEqual(result.returncode, 0)
+
+    def test_network_full_captive_limited_offline_mappings(self):
+        cases = [
+            ('full', 'available=1\nmetered=0\nconnectivity=4\n', True, False, 4),
+            ('captive', 'available=1\nmetered=0\nconnectivity=3\n', True, False, 3),
+            ('limited', 'available=1\nmetered=1\nconnectivity=2\n', True, True, 2),
+            ('offline', 'available=0\nmetered=0\nconnectivity=1\n', False, False, 1),
+        ]
+        for name, text, available, metered, connectivity in cases:
+            with self.subTest(name=name):
+                self.write_status(text)
+                self.assertIn('true' if available else 'false', self.call(f'{NETWORK}.GetAvailable'))
+                self.assertIn('true' if metered else 'false', self.call(f'{NETWORK}.GetMetered'))
+                self.assertIn(f'uint32 {connectivity}', self.call(f'{NETWORK}.GetConnectivity'))
+
+    def test_network_malformed_boolean_is_unknown(self):
+        self.write_status('available=2\nmetered=0\nconnectivity=4\n')
+        result = self.dbus(f'{NETWORK}.GetAvailable')
+        self.assertNotEqual(result.returncode, 0)
+
+    def test_network_out_of_range_connectivity_is_unknown(self):
+        self.write_status('available=1\nmetered=0\nconnectivity=5\n')
+        result = self.dbus(f'{NETWORK}.GetConnectivity')
+        self.assertNotEqual(result.returncode, 0)
+
+    def test_network_partial_snapshot_is_unknown(self):
+        # available/metered without connectivity: the triplet is only as
+        # good as its worst field, so no getter may report a value.
+        self.write_status('available=1\nmetered=0\n')
+        for method in ('GetAvailable', 'GetMetered', 'GetConnectivity'):
+            with self.subTest(method=method):
+                result = self.dbus(f'{NETWORK}.{method}')
+                self.assertNotEqual(result.returncode, 0)
+
+    def test_network_known_while_power_unknown_and_vice_versa(self):
+        self.write_status('available=1\nmetered=0\nconnectivity=4\n')
+        self.assertIn('true', self.call(f'{NETWORK}.GetAvailable'))
+        self.assertNotEqual(self.dbus('org.freedesktop.DBus.Properties.Get', POWER, 'power-saver-enabled').returncode, 0)
+        self.write_status('power-saver=1\n')
+        self.assertIn('true', self.call('org.freedesktop.DBus.Properties.Get', POWER, 'power-saver-enabled'))
+        self.assertNotEqual(self.dbus(f'{NETWORK}.GetAvailable').returncode, 0)
+
+    def test_status_symlink_destination_is_ignored(self):
+        real = self.runtime / 'real-status'
+        real.write_text('power-saver=1\n')
+        self.status.symlink_to(real)
+        result = self.dbus('org.freedesktop.DBus.Properties.Get', POWER, 'power-saver-enabled')
+        self.assertNotEqual(result.returncode, 0)
+
+    def test_status_oversized_snapshot_is_ignored(self):
+        self.write_status('power-saver=1\n' + 'x' * 600 + '\n')
+        result = self.dbus('org.freedesktop.DBus.Properties.Get', POWER, 'power-saver-enabled')
+        self.assertNotEqual(result.returncode, 0)
+
+    def startup_watch_regression(self, kind):
+        result = subprocess.run(['dbus-run-session', '--config-file=' + str(ROOT / 'scripts/portal-test-bus.conf'),
+                                 '--', sys.executable, str(ROOT / 'scripts/portal_test_startup.py'),
+                                 str(self.binary), str(self.watch_interposer), kind],
+                                capture_output=True, text=True, timeout=15)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_startup_status_watch_precedes_baseline(self):
+        self.startup_watch_regression('status')
+
+    def test_startup_settings_watch_precedes_baseline(self):
+        self.startup_watch_regression('settings')
+
+    def test_power_saver_same_value_rewrite_does_not_resignal(self):
+        seen = self.capture_bus_text(lambda: self.write_status('power-saver=1\n'),
+                                     matches=lambda s: 'PropertiesChanged' in s and '<true>' in s)
+        self.assertIn("'power-saver-enabled': <true>", seen)
+        seen = self.capture_bus_text(lambda: self.write_status('power-saver=1\n'), timeout=1.5)
+        self.assertNotIn('PropertiesChanged', seen)
+
+    def test_power_saver_change_emits_properties_changed(self):
+        self.write_status('power-saver=0\n')
+        self.call('org.freedesktop.DBus.Properties.Get', POWER, 'power-saver-enabled')
+        seen = self.capture_bus_text(lambda: self.write_status('power-saver=1\n'),
+                                      matches=lambda s: 'PropertiesChanged' in s)
+        self.assertIn('PropertiesChanged', seen)
+        self.assertIn('power-saver-enabled', seen)
+
+    def test_power_saver_invalidation_on_becoming_unknown(self):
+        self.write_status('power-saver=1\n')
+        self.call('org.freedesktop.DBus.Properties.Get', POWER, 'power-saver-enabled')
+        seen = self.capture_bus_text(lambda: self.write_status('available=1\nmetered=0\nconnectivity=4\n'),
+                                      matches=lambda s: 'PropertiesChanged' in s)
+        line = next(l for l in seen.splitlines() if 'PropertiesChanged' in l)
+        self.assertIn('power-saver-enabled', line)
+        # Invalidated, not a fabricated false: an empty changed-properties
+        # dict, with the name only in the invalidated-properties list.
+        self.assertIn('{}', line)
+        self.assertNotIn('<true>', line)
+        self.assertNotIn('<false>', line)
+
+    def test_network_changed_dedup_on_same_values(self):
+        seen = self.capture_bus_text(lambda: self.write_status('available=1\nmetered=0\nconnectivity=4\n'),
+                                     matches=lambda s: NETWORK + '.changed' in s)
+        self.assertIn(NETWORK + '.changed', seen)
+        seen = self.capture_bus_text(lambda: self.write_status('available=1\nmetered=0\nconnectivity=4\n'), timeout=1.5)
+        self.assertNotIn('.changed', seen)
+
+    def test_network_changed_emitted_on_value_change(self):
+        self.write_status('available=1\nmetered=0\nconnectivity=4\n')
+        self.call(f'{NETWORK}.GetAvailable')
+        seen = self.capture_bus_text(lambda: self.write_status('available=1\nmetered=0\nconnectivity=2\n'),
+                                      matches=lambda s: '.changed' in s)
+        self.assertIn('.changed', seen)
+
+    # ---- Settings accessibility fields (contrast, reduced-motion): the
+    # Android/parent wire contract appends two lines to the existing
+    # two-line appearance writer. portal-settings.c itself remains the
+    # parent's file; these cases exercise the agreed contract so the native
+    # suite documents it, and are expected to start passing once the
+    # parent's reader lands. ----
+
+    def test_accessibility_fields_default_zero_for_old_two_line_writer(self):
+        self.write_appearance(['dark', '#112233'])
+        for key in ('contrast', 'reduced-motion'):
+            with self.subTest(key=key):
+                self.assertIn('uint32 0', self.call(SETTINGS + '.ReadOne', 'org.freedesktop.appearance', key))
+
+    def test_accessibility_fields_exact_uint_types_from_new_four_line_writer(self):
+        self.write_appearance(['dark', '#112233', '1', '1'])
+        self.assertIn('uint32 1', self.call(SETTINGS + '.ReadOne', 'org.freedesktop.appearance', 'contrast'))
+        self.assertIn('uint32 1', self.call(SETTINGS + '.ReadOne', 'org.freedesktop.appearance', 'reduced-motion'))
+
+    def test_accessibility_fields_in_read_all_and_namespace_filter(self):
+        self.write_appearance(['light', '#aabbcc', '0', '1'])
+        included = self.call(SETTINGS + '.ReadAll', "['org.freedesktop.appearance']")
+        self.assertIn('contrast', included)
+        self.assertIn('reduced-motion', included)
+        excluded = self.call(SETTINGS + '.ReadAll', "['org.other.*']")
+        self.assertNotIn('contrast', excluded)
+
+    def test_accessibility_setting_changed_is_deduplicated(self):
+        seen = self.capture_bus_text(lambda: self.write_appearance(['dark', '#112233', '1', '1']),
+                                     matches=lambda s: "'contrast', <uint32 1>" in s and "'reduced-motion', <uint32 1>" in s)
+        self.assertIn("'contrast', <uint32 1>", seen)
+        self.assertIn("'reduced-motion', <uint32 1>", seen)
+        seen = self.capture_bus_text(lambda: self.write_appearance(['dark', '#112233', '1', '1']), timeout=1.5)
+        self.assertNotIn('contrast', seen)
+        self.assertNotIn('reduced-motion', seen)
+        seen = self.capture_bus_text(lambda: self.write_appearance(['dark', '#112233', '0', '0']),
+                                     matches=lambda s: "'contrast', <uint32 0>" in s and "'reduced-motion', <uint32 0>" in s)
+        self.assertIn("'contrast', <uint32 0>", seen)
+        self.assertIn("'reduced-motion', <uint32 0>", seen)
 
     def test_existing_filechooser_and_notifications(self):
         self.assertIn('uint32', self.call('org.freedesktop.DBus.Properties.Get', 'org.freedesktop.portal.FileChooser', 'version'))
         result = subprocess.run(['gdbus', 'call', '--session', '--dest', 'org.freedesktop.Notifications', '--object-path', '/org/freedesktop/Notifications', '--method', 'org.freedesktop.Notifications.GetCapabilities'], text=True, capture_output=True, timeout=5)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn('body', result.stdout)
+
+
+from portal_test_monitor import SignalCaptureTests
+SignalCaptureTests.capture_bus_text = PortalTests.capture_bus_text
 
 
 if __name__ == '__main__':

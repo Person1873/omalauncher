@@ -9,7 +9,7 @@ cd "$here"
 src=guest/omalauncher-portal
 out="$here/app/src/main/assets/guest-portal"
 mkdir -p "$out"
-gcc -O2 -Wall -o "$out/omalauncher-portal" "$src/omalauncher-portal.c" "$src/portal-settings.c" "$src/portal-actions.c" "$src/portal-transport.c" $(pkg-config --cflags --libs gio-2.0 gio-unix-2.0)
+gcc -O2 -Wall -o "$out/omalauncher-portal" "$src/omalauncher-portal.c" "$src/portal-settings.c" "$src/portal-actions.c" "$src/portal-status.c" "$src/portal-transport.c" $(pkg-config --cflags --libs gio-2.0 gio-unix-2.0)
 gcc -O2 -Wall -shared -fPIC -o "$out/libomalauncher-filechooser.so" "$src/filechooser-module.c" $(pkg-config --cflags --libs gtk+-3.0)
 
 gcc -O2 -Wall -o "$out/omalauncher-print-dialog" "$src/portal-print-dialog.c" $(pkg-config --cflags --libs gtk+-unix-print-3.0)

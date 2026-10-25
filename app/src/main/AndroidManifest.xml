@@ -2,6 +2,8 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- Read the Android default network for the guest NetworkMonitor portal. -->
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <!-- Held only while a live Linux Inhibit request asks to prevent suspend. -->
     <uses-permission android:name="android.permission.WAKE_LOCK" />
     <!-- Android 17+: widgets and Linux reaching 192.168.x and other local addresses. Asked for

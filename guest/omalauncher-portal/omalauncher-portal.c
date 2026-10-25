@@ -424,6 +424,11 @@ int main(void) {
         g_clear_error(&error);
         return 1;
     }
+    if (!portal_status_start(bus, runtime_dir, &error)) {
+        g_printerr("omalauncher-portal: status: %s\n", error->message);
+        g_clear_error(&error);
+        return 1;
+    }
     g_bus_own_name_on_connection(bus, BUS_NAME, G_BUS_NAME_OWNER_FLAGS_NONE, NULL, name_lost, loop, NULL);
     g_bus_own_name_on_connection(bus, NOTIFY_NAME, G_BUS_NAME_OWNER_FLAGS_NONE, NULL, name_lost, loop, NULL);
     g_main_loop_run(loop);

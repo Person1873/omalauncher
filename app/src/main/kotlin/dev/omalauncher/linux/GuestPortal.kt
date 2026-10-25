@@ -61,6 +61,8 @@ class GuestPortal(
                 "GTK_MODULES=omalauncher-filechooser",
                 "GTK_PATH=/usr/local/lib/gtk-3.0",
                 "GTK_USE_PORTAL=1",
+                // GLib's power/network monitors require their own portal opt-in.
+                "GIO_USE_PORTALS=1",
                 "GDK_DEBUG=portals",
                 "QT_QPA_PLATFORMTHEME=xdgdesktopportal",
             )

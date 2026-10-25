@@ -12,7 +12,22 @@ The launcher owns `org.freedesktop.portal.Desktop` directly. It is not an
 ## Implemented paths
 
 - **Settings:** appearance Read/ReadOne/ReadAll and live SettingChanged; light,
-  dark and no-preference values, plus accent colour.
+  dark and no-preference values, accent colour, higher contrast and reduced
+  motion. Higher contrast follows Android's public UI contrast preference on
+  API 34+; older releases report no contrast preference. Reduced motion follows
+  the public animator-duration-scale setting: zero means disabled animations.
+  Missing/invalid preferences report no preference, and two-line appearance
+  snapshots from older launchers remain supported.
+- **PowerProfileMonitor v1:** Android Battery Saver as `power-saver-enabled`,
+  with live `PropertiesChanged` and invalidation when the state is unavailable.
+- **NetworkMonitor v2:** Android default-network availability, metering and
+  connectivity (local, limited, captive portal or validated internet), with
+  live `changed` signals. Missing/unobserved status returns an error, not a
+  fabricated offline or unmetered result. Version 3 `GetStatus`/`CanReach`
+  are not advertised; this does not claim endpoint reachability probing.
+  The GLib portal frontend supports the version-2 getters. Guest processes
+  opt in using `GIO_USE_PORTALS=1` as well as GTK's portal setting; GTK's flag
+  alone does not select GLib's network/power portal backends.
 - **OpenURI / Email:** Android activity handoff. Files and attachments cross a
   same-UID Unix socket as actual SCM_RIGHTS descriptors, not host path strings.
   OpenFile opens a directory FD itself; OpenDirectory opens its containing
@@ -124,7 +139,9 @@ To exercise the shipped ARM64 portal rather than only a fresh host build, set
 `PORTAL_TEST_PORTAL_COMMAND` to an explicit command such as
 `qemu-aarch64 -L /path/to/sysroot /path/to/shipped/omalauncher-portal` and run
 the same protocol suite. This retains the private bus and explicit endpoint
-doubles; it is not Android activity coverage.
+doubles; it is not Android activity coverage. The startup watch-order probes
+use a test-only interposer with the freshly built host service, and the signal
+capture regressions use host subprocess pipes, even with an ARM64 command set.
 
 Build the guest binaries with `scripts/guest-portal/build.sh` inside an aarch64
 Arch environment. Package all five guest-portal assets; a Kotlin-only successful
@@ -134,7 +151,10 @@ APK build does not establish that the guest executables are present/current.
 
 Host tests cannot establish Android activity-launch permissions, document URI
 access/grant/revocation, notification permissions/actions, wake/idle behaviour,
-PrintJob lifecycle or physical printer output. Verify those on an authorized,
+PrintJob lifecycle or physical printer output. Power/network callback ordering,
+registration across launcher start/stop and live contrast/animation preference
+changes also require Android validation; pure snapshot/lifecycle policy tests
+and native D-Bus tests do not establish those callbacks. Verify on an authorized,
 isolated test device before treating the feature as production-ready. A debug
 APK is not an authorized upgrade of an existing signed installation.
 

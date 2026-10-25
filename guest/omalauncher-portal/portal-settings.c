@@ -24,14 +24,16 @@ static const gchar settings_xml[] =
 typedef struct {
     guint32 scheme;
     gdouble red, green, blue;
+    guint32 contrast, reduced_motion;
 } Appearance;
 static Appearance last_appearance;
 static GFileMonitor *appearance_monitor;
 
-/* Two lines from Android: light|dark, then #RRGGBB. Missing/bad data is no
+/* Android publishes light|dark, #RRGGBB, contrast, reduced-motion. The last
+ * two lines are optional for old writers. Missing/bad preferences mean no
  * preference; (-1,-1,-1) is the spec's unset accent, not a fabricated color. */
 static Appearance appearance_read(void) {
-    Appearance a = {0, -1, -1, -1};
+    Appearance a = {0, -1, -1, -1, 0, 0};
     gchar *path = g_build_filename(runtime_dir, APPEARANCE_FILE, NULL);
     int fd = open(path, O_RDONLY | O_NOFOLLOW | O_NONBLOCK);
     g_free(path);
@@ -41,7 +43,8 @@ static Appearance appearance_read(void) {
     ssize_t n = fstat(fd, &st) == 0 && S_ISREG(st.st_mode) ? read(fd, data, sizeof(data) - 1) : -1;
     close(fd);
     if (n < 0) return a;
-    gchar **lines = g_strsplit(data, "\n", 3);
+    gchar **lines = g_strsplit(data, "\n", 5);
+    guint count = g_strv_length(lines);
     if (g_strcmp0(lines[0], "dark") == 0) a.scheme = 1;
     else if (g_strcmp0(lines[0], "light") == 0) a.scheme = 2;
     const gchar *hex = lines[0] && lines[1] ? lines[1] : "";
@@ -53,6 +56,8 @@ static Appearance appearance_read(void) {
         a.green = ((rgb >> 8) & 255) / 255.0;
         a.blue = (rgb & 255) / 255.0;
     }
+    if (count > 2 && g_str_equal(lines[2], "1")) a.contrast = 1;
+    if (count > 3 && g_str_equal(lines[3], "1")) a.reduced_motion = 1;
     g_strfreev(lines);
     return a;
 }
@@ -60,6 +65,8 @@ static Appearance appearance_read(void) {
 static GVariant *appearance_value(Appearance a, const gchar *key) {
     if (g_str_equal(key, "color-scheme")) return g_variant_new_uint32(a.scheme);
     if (g_str_equal(key, "accent-color")) return g_variant_new("(ddd)", a.red, a.green, a.blue);
+    if (g_str_equal(key, "contrast")) return g_variant_new_uint32(a.contrast);
+    if (g_str_equal(key, "reduced-motion")) return g_variant_new_uint32(a.reduced_motion);
     return NULL;
 }
 
@@ -89,6 +96,8 @@ static void settings_call(GDBusConnection *conn, const gchar *sender, const gcha
             g_variant_builder_init(&ns, G_VARIANT_TYPE_VARDICT);
             g_variant_builder_add(&ns, "{sv}", "color-scheme", appearance_value(a, "color-scheme"));
             g_variant_builder_add(&ns, "{sv}", "accent-color", appearance_value(a, "accent-color"));
+            g_variant_builder_add(&ns, "{sv}", "contrast", appearance_value(a, "contrast"));
+            g_variant_builder_add(&ns, "{sv}", "reduced-motion", appearance_value(a, "reduced-motion"));
             g_variant_builder_add(&all, "{sa{sv}}", APPEARANCE, &ns);
         }
         g_variant_unref(namespaces);
@@ -127,6 +136,12 @@ static void appearance_changed(GFileMonitor *monitor, GFile *file, GFile *other,
     if (a.red != last_appearance.red || a.green != last_appearance.green || a.blue != last_appearance.blue)
         g_dbus_connection_emit_signal(bus, NULL, OBJECT_PATH, "org.freedesktop.portal.Settings", "SettingChanged",
                                      g_variant_new("(ssv)", APPEARANCE, "accent-color", appearance_value(a, "accent-color")), NULL);
+    if (a.contrast != last_appearance.contrast)
+        g_dbus_connection_emit_signal(bus, NULL, OBJECT_PATH, "org.freedesktop.portal.Settings", "SettingChanged",
+                                     g_variant_new("(ssv)", APPEARANCE, "contrast", appearance_value(a, "contrast")), NULL);
+    if (a.reduced_motion != last_appearance.reduced_motion)
+        g_dbus_connection_emit_signal(bus, NULL, OBJECT_PATH, "org.freedesktop.portal.Settings", "SettingChanged",
+                                     g_variant_new("(ssv)", APPEARANCE, "reduced-motion", appearance_value(a, "reduced-motion")), NULL);
     last_appearance = a;
 }
 
@@ -138,7 +153,6 @@ gboolean portal_settings_start(GDBusConnection *connection, const gchar *runtime
     guint registration = g_dbus_connection_register_object(bus, OBJECT_PATH, info->interfaces[0], &settings_vtable, NULL, NULL, error);
     g_dbus_node_info_unref(info);
     if (!registration) return FALSE;
-    last_appearance = appearance_read();
     /* Monitor the containing directory: atomic rename replaces the inode. */
     GFile *dir = g_file_new_for_path(runtime_dir);
     GError *monitor_error = NULL;
@@ -149,5 +163,9 @@ gboolean portal_settings_start(GDBusConnection *connection, const gchar *runtime
         g_printerr("omalauncher-portal: appearance monitor: %s\n", monitor_error->message);
         g_clear_error(&monitor_error);
     }
+    /* Install and connect the watch before sampling, still before bus-name
+     * ownership. Otherwise a startup replacement can leave a stale baseline
+     * that suppresses the next real transition back to the sampled value. */
+    last_appearance = appearance_read();
     return TRUE;
 }
