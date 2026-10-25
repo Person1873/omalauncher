@@ -19,10 +19,10 @@ class PortalPrintActivity : ComponentActivity() {
             val session = PortalPrintSession(r)
             r.printSession = session
             session.start(this)
-        }
+        } else if (!r.printSession!!.attachHost(this)) r.finish(2)
     }
     override fun onDestroy() {
-        if (isFinishing && !isChangingConfigurations && request?.activity?.get() === this) request?.cancel()
+        request?.printSession?.hostDestroyed(this)
         super.onDestroy()
     }
 }

@@ -37,14 +37,13 @@ import java.nio.file.Files
 import java.nio.file.StandardCopyOption
 import java.util.UUID
 import java.util.WeakHashMap
-import java.util.concurrent.Semaphore
 
 /** Native portal transport. Only this app's kernel UID may connect. Received FDs
  * are capabilities; guest-provided paths never authorize Android file access. */
 internal class AndroidPortals(private val context: Context, private val proot: Proot) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO.limitedParallelism(80))
     private val handler = Handler(Looper.getMainLooper())
-    private val slots = Semaphore(64)
+    private var connections: PortalConnections<LocalSocket>? = null
     @Volatile private var server: LocalServerSocket? = null
     @Volatile private var generation = 0
     private val requests = mutableMapOf<String, Request>() // main thread only
@@ -75,6 +74,13 @@ internal class AndroidPortals(private val context: Context, private val proot: P
         val name = context.packageName + ".portal." + Process.myUid()
         val listener = LocalServerSocket(name)
         val epoch = ++generation
+        val clients = PortalConnections<LocalSocket>(64,
+            authorizePeer = { it.peerCredentials.uid == Process.myUid() }) { socket ->
+            runCatching { socket.shutdownInput() }
+            runCatching { socket.shutdownOutput() }
+            runCatching { socket.close() }
+        }
+        connections = clients
         server = listener
         try {
             val tmp = Files.createTempFile(proot.runtimeDir.toPath(), ".portal-socket-", ".tmp")
@@ -82,34 +88,41 @@ internal class AndroidPortals(private val context: Context, private val proot: P
                 Files.write(tmp, name.toByteArray(Charsets.UTF_8))
                 Files.move(tmp, File(proot.runtimeDir, SOCKET_FILE).toPath(), StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING)
             } finally { Files.deleteIfExists(tmp) }
-        } catch (e: Exception) { server = null; listener.close(); throw e }
+        } catch (e: Exception) { server = null; connections = null; clients.stop(); listener.close(); throw e }
         scope.launch {
             while (server === listener) {
                 val socket = try { listener.accept() } catch (e: IOException) {
                     if (server === listener) Log.w(TAG, "portal accept failed", e)
                     break
                 }
-                if (socket.peerCredentials.uid != Process.myUid() || !slots.tryAcquire()) { socket.close(); continue }
-                scope.launch { receive(socket, epoch) }
+                if (clients.admit(socket)) scope.launch { receive(socket, epoch, clients) }
             }
         }
     }
 
     @Synchronized fun stop() {
-        ++generation
+        val oldEpoch = generation
+        val stoppedAt = ++generation
         val old = server; server = null
+        val clients = connections; connections = null
         old?.let {
             runCatching { Os.shutdown(it.fileDescriptor, OsConstants.SHUT_RDWR) }
             runCatching { it.close() }
         }
+        clients?.stop()
         File(proot.runtimeDir, SOCKET_FILE).delete()
-        handler.post { requests.values.toList().forEach { it.finish(2) }; releaseInhibitors(); PortalFiles.clear(context) }
+        handler.post {
+            requests.values.filter { it.epoch <= oldEpoch }.toList().forEach { it.finish(2) }
+            if (generation == stoppedAt) releaseInhibitors()
+            PortalFiles.clear(context, oldEpoch)
+        }
     }
 
-    private suspend fun receive(socket: LocalSocket, epoch: Int) {
+    private suspend fun receive(socket: LocalSocket, epoch: Int, clients: PortalConnections<LocalSocket>) {
         val descriptors = mutableListOf<ParcelFileDescriptor>()
         var request: Request? = null
         try {
+            require(socket.peerCredentials.uid == Process.myUid()) { "Wrong portal UID" }
             socket.soTimeout = 15_000
             val input = socket.inputStream
             fun readExactly(bytes: ByteArray) {
@@ -135,7 +148,7 @@ internal class AndroidPortals(private val context: Context, private val proot: P
             require(fields["fd-count"]?.toIntOrNull() == descriptors.size) { "Descriptor count mismatch" }
             withContext(Dispatchers.Main) {
                 check(epoch == generation && server != null) { "Portal session stopped" }
-                request = Request(UUID.randomUUID().toString(), socket, fields, descriptors.toList())
+                request = Request(UUID.randomUUID().toString(), socket, fields, descriptors.toList(), epoch)
                 val r = request!!
                 requests[r.id] = r
                 dispatch(r)
@@ -147,10 +160,11 @@ internal class AndroidPortals(private val context: Context, private val proot: P
         } catch (e: Exception) {
             if (request == null) Log.w(TAG, "rejected portal packet", e)
         } finally {
-            withContext(Dispatchers.Main) { request?.cancel() }
-            descriptors.forEach { runCatching { it.close() } }
-            runCatching { socket.close() }
-            slots.release()
+            try { withContext(Dispatchers.Main) { request?.cancel() } }
+            finally {
+                descriptors.forEach { runCatching { it.close() } }
+                clients.release(socket)
+            }
         }
     }
 
@@ -217,10 +231,10 @@ internal class AndroidPortals(private val context: Context, private val proot: P
         return guest
     }
 
-    fun get(id: String?): Request? = requests[id]
-    fun selected(id: String?) { requests[id]?.finish(0) }
+    fun get(id: String?): Request? = requests[id]?.takeIf { it.epoch == generation && server != null }
+    fun selected(id: String?) { get(id)?.finish(0) }
     fun notificationAction(id: String?, index: Int) {
-        val r = requests[id] ?: return
+        val r = get(id) ?: return
         if (index !in 0..3 || r.notificationTag == null) return
         try { r.event("A\t$index\n") } catch (_: IOException) { r.cancel(); return }
         if (index == 0) r.cancel()
@@ -293,7 +307,7 @@ internal class AndroidPortals(private val context: Context, private val proot: P
         }
     }
 
-    inner class Request internal constructor(val id: String, private val socket: LocalSocket, val fields: Map<String, String>, val fds: List<ParcelFileDescriptor>) {
+    inner class Request internal constructor(val id: String, private val socket: LocalSocket, val fields: Map<String, String>, val fds: List<ParcelFileDescriptor>, val epoch: Int) {
         var finished = false; private set
         var activity: WeakReference<Activity>? = null
         var inhibitFlags = 0
@@ -301,7 +315,7 @@ internal class AndroidPortals(private val context: Context, private val proot: P
         var printSession: PortalPrintSession? = null
         private val grants = mutableListOf<android.net.Uri>()
         var chooserCallback: android.app.PendingIntent? = null
-        fun share(fd: ParcelFileDescriptor, writable: Boolean = false): android.net.Uri = PortalFiles.register(context, fd, writable).also { grants += it }
+        fun share(fd: ParcelFileDescriptor, writable: Boolean = false): android.net.Uri = PortalFiles.register(context, fd, writable, epoch).also { grants += it }
         fun acknowledge() { socket.outputStream.write("0\n".toByteArray(Charsets.US_ASCII)); socket.outputStream.flush() }
         fun event(value: String) { socket.outputStream.write(value.toByteArray(Charsets.US_ASCII)); socket.outputStream.flush() }
         fun finish(status: Int) {
@@ -329,7 +343,7 @@ internal class AndroidPortals(private val context: Context, private val proot: P
         private const val TAG = "portal"
         private const val SOCKET_FILE = "omalauncher-portal-socket"
         fun viewIntent(value: String): Intent {
-            val uri = android.net.Uri.parse(value)
+            val uri = android.net.Uri.parse(PortalWire.normalizeUriScheme(value))
             return Intent(if (uri.scheme == "mailto") Intent.ACTION_SENDTO else Intent.ACTION_VIEW, uri).apply {
                 if (uri.scheme == "http" || uri.scheme == "https") addCategory(Intent.CATEGORY_BROWSABLE)
             }

@@ -22,7 +22,7 @@ import java.util.UUID
  * Reopening our retained /proc/self/fd entry gives each consumer an independent
  * offset and enforces read-only access even if the sender supplied an O_RDWR FD. */
 internal object PortalFiles {
-    private data class Lease(val fd: ParcelFileDescriptor, val name: String, val mime: String, val writable: Boolean)
+    private data class Lease(val fd: ParcelFileDescriptor, val name: String, val mime: String, val writable: Boolean, val epoch: Int)
     private val leases = mutableMapOf<String, Lease>()
     private val handler = Handler(Looper.getMainLooper())
     private const val LIFETIME_MS = 24 * 60 * 60 * 1000L
@@ -37,7 +37,7 @@ internal object PortalFiles {
         return try { ParcelFileDescriptor.dup(raw) } finally { Os.close(raw) }
     }
 
-    @Synchronized fun register(context: Context, fd: ParcelFileDescriptor, writable: Boolean): Uri {
+    @Synchronized fun register(context: Context, fd: ParcelFileDescriptor, writable: Boolean, epoch: Int): Uri {
         require(leases.size < 128) { "Too many shared documents" }
         val stat = Os.fstat(fd.fileDescriptor)
         require(S_ISREG(stat.st_mode)) { "Only regular documents can be shared" }
@@ -49,7 +49,7 @@ internal object PortalFiles {
         val name = path.substringAfterLast('/').removeSuffix(" (deleted)").ifBlank { "document" }
         val mime = MimeTypeMap.getSingleton().getMimeTypeFromExtension(name.substringAfterLast('.', "").lowercase(java.util.Locale.ROOT)) ?: "application/octet-stream"
         val token = UUID.randomUUID().toString()
-        leases[token] = Lease(ParcelFileDescriptor.dup(fd.fileDescriptor), name, mime, writable)
+        leases[token] = Lease(ParcelFileDescriptor.dup(fd.fileDescriptor), name, mime, writable, epoch)
         val uri = Uri.Builder().scheme("content").authority(context.packageName + ".portal-files").appendPath(token).appendPath(name).build()
         handler.postDelayed({ revoke(context, uri) }, LIFETIME_MS)
         return uri
@@ -60,11 +60,12 @@ internal object PortalFiles {
         context.revokeUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
     }
 
-    @Synchronized fun clear(context: Context) {
-        val uris = leases.map { (token, lease) -> Uri.Builder().scheme("content").authority(context.packageName + ".portal-files").appendPath(token).appendPath(lease.name).build() }
-        leases.values.forEach { runCatching { it.fd.close() } }
-        leases.clear()
-        uris.forEach { context.revokeUriPermission(it, Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION) }
+    @Synchronized fun clear(context: Context, throughEpoch: Int) {
+        val expired = leases.filterValues { it.epoch <= throughEpoch }
+        expired.forEach { (token, lease) ->
+            val uri = Uri.Builder().scheme("content").authority(context.packageName + ".portal-files").appendPath(token).appendPath(lease.name).build()
+            runCatching { revoke(context, uri) }
+        }
     }
 
     @Synchronized fun open(uri: Uri, mode: String): ParcelFileDescriptor {

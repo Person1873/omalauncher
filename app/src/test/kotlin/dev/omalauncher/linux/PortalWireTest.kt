@@ -61,6 +61,29 @@ class PortalWireTest {
         assertEquals("/", PortalWire.directoryToOpen("/document", containing = true))
     }
 
+    @Test fun androidUriSchemesAreNormalizedWithoutRewritingTheirPayload() {
+        val uris = listOf(
+            "HTTPS://Example.org/Some%2FPath?Token=AbC#Section" to "https://Example.org/Some%2FPath?Token=AbC#Section",
+            "HtTp://Example.org/Path" to "http://Example.org/Path",
+            "MAILTO:MixedCase@Example.org?subject=Keep%20Case" to "mailto:MixedCase@Example.org?subject=Keep%20Case",
+            "TEL:+123456789" to "tel:+123456789",
+            "Sms:+123456789?body=Keep%20Case" to "sms:+123456789?body=Keep%20Case",
+            "GEO:0,0?q=Some%20Place" to "geo:0,0?q=Some%20Place",
+        )
+        for ((input, expected) in uris) {
+            assertTrue(PortalWire.safeUri(input))
+            assertEquals(expected, PortalWire.normalizeUriScheme(input))
+            assertEquals(expected, PortalWire.normalizeUriScheme(expected))
+        }
+    }
+
+    @Test fun normalizingUriSchemesDoesNotBypassTheAllowlist() {
+        for (uri in listOf("INTENT://settings#Intent;end", "FiLe:///private", "CONTENT://private/provider",
+            "JAVASCRIPT:alert(1)", "https://example.org\nintent:payload", "https")) {
+            assertThrows(IllegalArgumentException::class.java) { PortalWire.normalizeUriScheme(uri) }
+        }
+    }
+
     @Test fun uriSchemesCannotLaunchArbitraryAndroidIntents() {
         assertTrue(PortalWire.safeUri("https://example.org/test"))
         assertTrue(PortalWire.safeUri("mailto:user@example.org"))

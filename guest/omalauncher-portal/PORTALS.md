@@ -1,9 +1,9 @@
-# Guest portals — design-review draft
+# Guest portals — unfinished implementation draft
 
 This draft depends on the shared session bus in PR #210. It includes that
 commit while the bus change is unmerged; it does not replace the bus proposal.
-The scope is one portal layer for design review, not a production-ready claim
-for every interface below. Android lifecycle validation remains outstanding.
+Implementation is unfinished and the PR must remain a draft. Host checks do
+not establish production readiness; Android lifecycle validation remains outstanding.
 
 The launcher owns `org.freedesktop.portal.Desktop` directly. It is not an
 `org.freedesktop.impl.portal.*` backend: the normal desktop frontend's
@@ -24,6 +24,8 @@ The launcher owns `org.freedesktop.portal.Desktop` directly. It is not an
   compose with those fields silently omitted. `attachment_fds` contains message
   FD indices, not paths or plain integers. Empty options/attachment lists are
   supported; the bridge allows up to eight regular-file attachment capabilities.
+  URI schemes are normalized for Android's case-sensitive intent matching;
+  addresses, paths, query strings and fragments retain their original spelling.
   Email advertises version 3, not version 4 activation-token support.
   Rejected batches release partial FD copies and their request registration.
 - **Inhibit:** suspend/idle leases, released on request Close, caller loss and
@@ -42,6 +44,13 @@ The launcher owns `org.freedesktop.portal.Desktop` directly. It is not an
 
 This is an expansion of the interfaces above, not a claim to implement every
 interface in xdg-desktop-portal.
+
+Every accepted transport peer belongs to its listener epoch, including peers
+still sending their first header or body. Stop shuts down those sockets;
+late accepts are rejected and closed. UID authorization precedes admission to
+the 64-peer budget. An old receive completion cannot release a restarted
+listener's capacity, and delayed cleanup affects only old requests/document
+grants, not the replacement session.
 
 ## Printing semantics
 
@@ -132,8 +141,14 @@ APK is not an authorized upgrade of an existing signed installation.
 Include rotation during PDF preparation and while the print dialog is open,
 an unavailable print service, and closing a request while its Android chooser
 is visible. Print startup now handles descriptor failures and a null PrintJob;
-the transparent print host handles configuration changes to retain its adapter.
-Those repairs are compiled, not yet device-validated. In particular, dismissal
+the transparent print host handles known configuration changes, including
+grammatical gender and resource overlays, to retain its adapter. Unexpected
+host destruction before adapter handoff fails the request instead of leaving
+it attached to an obsolete Activity. Once the adapter has finished, host
+replacement continues observing the existing job; it does not submit it again.
+Pure host-policy and transport-ownership tests, including a real JVM TCP
+partial-header read/close, do not establish Android Activity, LocalSocket or
+SCM_RIGHTS lifecycle behavior. Those repairs are not yet device-validated. In particular, dismissal
 of an already-visible chooser on request Close remains unverified.
 
 Implementation and host-verification work were AI-assisted.

@@ -28,11 +28,13 @@ internal class PortalPrintSession(private val request: AndroidPortals.Request) {
     private val handler = Handler(Looper.getMainLooper())
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val closed = AtomicBoolean(false)
+    private val host = PortalPrintHost<Activity>()
     private var source: ParcelFileDescriptor? = null
     private var job: PrintJob? = null
     private var poll: Runnable? = null
 
     fun start(activity: Activity) {
+        if (!attachHost(activity)) { request.finish(2); return }
         scope.launch {
             var preparing: ParcelFileDescriptor? = null
             try {
@@ -44,7 +46,7 @@ internal class PortalPrintSession(private val request: AndroidPortals.Request) {
                     pdf.openPage(0).use { page -> Triple(pdf.pageCount, page.width, page.height) }
                 }
                 handler.post {
-                    if (closed.get() || request.finished) { prepared.close(); return@post }
+                    if (closed.get() || request.finished || !host.owns(activity)) { prepared.close(); return@post }
                     source = prepared
                     try {
                         val title = request.fields["title"].orEmpty().ifBlank { "Linux document" }
@@ -82,7 +84,7 @@ internal class PortalPrintSession(private val request: AndroidPortals.Request) {
                             }
                             // onFinish means the adapter is no longer needed, not
                             // that the physical/service print job succeeded.
-                            override fun onFinish() { checkJob() }
+                            override fun onFinish() { host.adapterFinished(); checkJob() }
                         }
                         val media = PrintAttributes.MediaSize("linux-pdf", "Linux document", (dimensions.second * 1000L / 72).coerceIn(1, Int.MAX_VALUE.toLong()).toInt(), (dimensions.third * 1000L / 72).coerceIn(1, Int.MAX_VALUE.toLong()).toInt())
                         val attributes = PrintAttributes.Builder().setMediaSize(media).setColorMode(PrintAttributes.COLOR_MODE_COLOR).setMinMargins(PrintAttributes.Margins.NO_MARGINS).build()
@@ -98,6 +100,12 @@ internal class PortalPrintSession(private val request: AndroidPortals.Request) {
                 handler.post { if (!request.finished) request.finish(2) }
             }
         }
+    }
+
+    fun attachHost(activity: Activity): Boolean = host.attach(activity)
+
+    fun hostDestroyed(activity: Activity) {
+        if (host.destroyed(activity) && !request.finished) request.finish(2)
     }
 
     private fun checkJob() {
@@ -116,6 +124,7 @@ internal class PortalPrintSession(private val request: AndroidPortals.Request) {
 
     fun close() {
         if (!closed.compareAndSet(false, true)) return
+        host.close()
         poll?.let(handler::removeCallbacks); poll = null
         runCatching { job?.let { if (!it.isCompleted && !it.isCancelled && !it.isFailed) it.cancel() } }
         scope.cancel()

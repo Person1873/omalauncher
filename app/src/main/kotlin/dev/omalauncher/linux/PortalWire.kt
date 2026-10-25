@@ -52,6 +52,13 @@ internal object PortalWire {
     fun directoryToOpen(guestPath: String, containing: Boolean): String =
         if (containing) guestPath.substringBeforeLast('/', "").ifEmpty { "/" } else guestPath
 
+    /** Android matches intent schemes case-sensitively; preserve everything after ':'. */
+    fun normalizeUriScheme(value: String): String {
+        require(safeUri(value)) { "unsupported URI" }
+        val separator = value.indexOf(':')
+        return value.substring(0, separator).lowercase(java.util.Locale.ROOT) + value.substring(separator)
+    }
+
     fun safeUri(value: String): Boolean {
         if (value.any { it <= '\u001f' || it == '\u007f' }) return false
         val scheme = value.substringBefore(':', "").lowercase(java.util.Locale.ROOT)
