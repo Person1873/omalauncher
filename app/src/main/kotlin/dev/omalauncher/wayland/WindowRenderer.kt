@@ -21,6 +21,8 @@ data class Layer(
     val inPopup: Boolean,
     /** False for what a drag carries (its icon, a toplevel it drags along): it's never what the drag is over. */
     val hittable: Boolean = true,
+    /** Set for the launcher's bar over a floating window: [surface] is that window's, [store] the bar's pixels. */
+    val decoration: XdgToplevel? = null,
 )
 
 /** Hit-test result: a surface and a point in its local logical coordinates. */
@@ -31,6 +33,10 @@ data class SurfaceHit(
     val inPopup: Boolean = false,
     /** Window pixels per logical pixel where the surface is drawn, to turn finger movement into the surface's units. */
     val scale: Float = 1f,
+    /** A press on the launcher's bar over this floating window: it moves the window, not input for the app. */
+    val decoration: XdgToplevel? = null,
+    /** On that bar, its close button. */
+    val onClose: Boolean = false,
 )
 
 /**
@@ -123,6 +129,7 @@ class WindowRenderer(
 
     fun release() {
         detach()
+        lock.withLock { bars.release() }
         thread.quitSafely()
     }
 
@@ -213,6 +220,13 @@ class WindowRenderer(
         origins[window] = Triple(0f, 0f, scale)
         for (child in window.children) placeChild(child, output)?.let { (x, y, s) ->
             origins[child] = Triple(x, y, s)
+            // One that left decorating to us floats under the launcher's bar, drawn with it in the same frame.
+            if (!child.fullscreen && child.serverDecorated && child.dragOffset == null) {
+                val cg0 = child.xdg.effectiveGeometry
+                bars.store(child, (cg0.width * s).roundToInt(), server.windowManager)?.let { bar ->
+                    layers += Layer(child.surface, bar, x.roundToInt(), (y - bar.height).roundToInt(), bar.width, bar.height, s, inPopup = false, decoration = child)
+                }
+            }
             val cg = child.xdg.effectiveGeometry
             addTree(layers, child.surface, x - cg.x * s, y - cg.y * s, s, inPopup = false, hittable = child.dragOffset == null)
         }
@@ -235,6 +249,9 @@ class WindowRenderer(
     }
 
     private val origins = HashMap<XdgToplevel, Triple<Float, Float, Float>>()
+
+    /** The launcher's bars over this window's floating windows. */
+    private val bars = DecorationBars()
 
     /**
      * Where a window hosted by this one goes, and its scale; null until it has content. It floats at its own
@@ -269,8 +286,10 @@ class WindowRenderer(
         val at = server.input.dragPoint
         if (offset != null && at != null) child.position = at.first - offset.first * output to at.second - offset.second * output
         val (x, y) = child.position ?: ((width - w) / 2 to (bottom - h) / 2).also { child.position = it }
-        // On screen whatever the view did since: the keyboard came up, the phone turned.
-        return Triple(x.coerceIn(0f, (width - w).coerceAtLeast(0f)), y.coerceIn(0f, (bottom - h).coerceAtLeast(0f)), output.toFloat())
+        // On screen whatever the view did since: the keyboard came up, the phone turned. A decorated one keeps room
+        // above it for the launcher's bar.
+        val top = if (child.serverDecorated) server.windowManager.decorationHeight.toFloat() else 0f
+        return Triple(x.coerceIn(0f, (width - w).coerceAtLeast(0f)), y.coerceIn(top, (bottom - h).coerceAtLeast(top)), output.toFloat())
     }
 
     private fun addTree(
@@ -322,6 +341,7 @@ class WindowRenderer(
             if (!l.hittable || l.store == null || l.surface.destroyed || x < l.x || y < l.y || x >= l.x + l.width || y >= l.y + l.height) continue
             val lx = (x - l.x) / l.scale
             val ly = (y - l.y) / l.scale
+            l.decoration?.let { top -> return SurfaceHit(l.surface, 0f, 0f, scale = l.scale, decoration = top, onClose = x >= l.x + l.width - l.height) }
             if (!l.surface.takesInput(lx, ly)) continue
             return SurfaceHit(l.surface, lx, ly, l.inPopup, l.scale)
         }
